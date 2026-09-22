@@ -1,0 +1,6 @@
+mission_manager:
+  ros__parameters:
+    use_sim_time: true
+    waypoints_file: "/home/stella/Trailblazer/trail_decision_making/config/recorded_trail_paths.yaml"
+    global_frame: "map"
+    nav_action_name: "/husky1/navigate_through_poses"
