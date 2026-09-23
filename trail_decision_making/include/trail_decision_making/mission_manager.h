@@ -58,6 +58,8 @@ namespace trail_decision_making
         int current_node_id_{-1};
         int current_edge_id_{-1};
         bool traversing_reverse_{false};
+        bool return_pass_pending_{false};
+        bool return_pass_active_{false};
         bool mission_active_{false};
         // a deque is used here because we will be popping from the front as we traverse edges
         std::deque<int> route_; // sequence of edge ids to traverse, in order, to reach the next uninspected edge

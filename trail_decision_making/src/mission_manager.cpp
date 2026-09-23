@@ -125,6 +125,8 @@ namespace trail_decision_making
             return;
         }
         traversing_reverse_ = (edge->to_node == current_node_id_);
+        return_pass_pending_ = (edge->status == EdgeStatus::UNINSPECTED);
+        return_pass_active_ = false;
         RCLCPP_INFO(get_logger(), "Edge %d connects node %d -> %d; current node=%d; reverse=%s",
                     edge->id, edge->from_node, edge->to_node, current_node_id_,
                     traversing_reverse_ ? "true" : "false");
@@ -290,10 +292,35 @@ namespace trail_decision_making
 
     void MissionManager::onEdgeFinished()
     {
-        if (graph_.getEdgeStatus(current_edge_id_) == EdgeStatus::UNINSPECTED)
+        const TrailEdge *edge = graph_.getEdge(current_edge_id_);
+        if (!edge)
+        {
+            RCLCPP_ERROR(get_logger(), "Could not finish missing edge %d", current_edge_id_);
+            return;
+        }
+
+        if (return_pass_pending_ && !return_pass_active_)
+        {
+            // The outbound pass reached the far endpoint. Return along the
+            // same edge before marking the trail inspected.
+            current_node_id_ = planner_.otherEnd(current_edge_id_, current_node_id_);
+            return_pass_active_ = true;
+            traversing_reverse_ = !traversing_reverse_;
+            RCLCPP_INFO(get_logger(), "Outbound pass complete on edge %d; starting return pass",
+                        current_edge_id_);
+            startEdgeFollow(*edge, traversing_reverse_);
+            return;
+        }
+
+        if (return_pass_active_)
         {
             graph_.setEdgeStatus(current_edge_id_, EdgeStatus::INSPECTED);
+            return_pass_pending_ = false;
+            return_pass_active_ = false;
+            RCLCPP_INFO(get_logger(), "Return pass complete on edge %d; trail marked inspected",
+                        current_edge_id_);
         }
+
         current_node_id_ = planner_.otherEnd(current_edge_id_, current_node_id_);
         chooseNextEdgeAndSendGoal();
     }
