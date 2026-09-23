@@ -18,10 +18,10 @@ namespace trail_decision_making
         global_frame_ = declare_parameter<std::string>("global_frame", "map");
         robot_frame_ = declare_parameter<std::string>("robot_frame", "base_link");
 
-        max_turn_rate_ = declare_parameter<double>("max_turn_rate", 1.0);
-        max_speed_ = declare_parameter<double>("max_speed", 0.5);
-        angle_tolerance_ = declare_parameter<double>("angle_tolerance", 0.1);
-        goal_tolerance_ = declare_parameter<double>("goal_tolerance", 0.1);
+        // max_turn_rate_ = declare_parameter<double>("max_turn_rate", 1.0);
+        // max_speed_ = declare_parameter<double>("max_speed", 0.5);
+        // angle_tolerance_ = declare_parameter<double>("angle_tolerance", 0.1);
+        // goal_tolerance_ = declare_parameter<double>("goal_tolerance", 0.1);
 
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -228,24 +228,20 @@ namespace trail_decision_making
             drive_state_ = DriveState::TURNING;
             break;
         case DriveState::TURNING:
-            if (std::fabs(angle_diff) < angle_tolerance_)
+            // Use the same hysteresis band as MOVING.  Requiring the tighter
+            // tolerance here can leave the robot rotating forever around the
+            // target heading when the simulator does not settle exactly.
+            if (std::fabs(angle_diff) <= angle_tolerance_ * 3.0)
             {
-                RCLCPP_INFO(get_logger(), "Heading is within tolerance; state TURNING -> MOVING");
+                RCLCPP_INFO(get_logger(), "Heading error is acceptable; state TURNING -> MOVING");
                 drive_state_ = DriveState::MOVING;
             }
             else
             {
-                const double min_turn = max_turn_rate_ * 0.5; // floor to overcome stiction
-                double turn = std::clamp(angle_diff * 2.0, -max_turn_rate_, max_turn_rate_);
-                if (angle_diff > 0)
-                {
-                    turn = std::max(turn, min_turn);
-                }
-                else
-                {
-                    turn = std::min(turn, -min_turn);
-                }
-                cmd.angular.z = turn;
+                // Avoid forcing a large turn rate for small errors; that can
+                // make the robot oscillate around the heading tolerance.
+                cmd.angular.z = std::clamp(
+                    angle_diff * 2.0, -max_turn_rate_, max_turn_rate_);
                 RCLCPP_INFO(get_logger(), "Turning toward target: angular.z=%.3f", cmd.angular.z);
             }
             break;

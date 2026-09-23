@@ -39,11 +39,13 @@ namespace trail_decision_making
         std::vector<Waypoint> current_path_;
         size_t current_wp_index_{0};
 
-        double max_turn_rate_{1.0};
-        double max_speed_{1.0};
-        double angle_tolerance_{0.1};
-        double goal_tolerance_{0.2};
+        // Control parameters
+        double max_turn_rate_= 1.0;
+        double max_speed_ = 1.0;
+        double angle_tolerance_ = 0.1;
+        double goal_tolerance_ = 0.1;
 
+        // Mission control methods
         void startEdgeFollow(const TrailEdge &edge, bool reverse);
         void controlLoopCallback();
         void onEdgeFinished();
@@ -52,11 +54,13 @@ namespace trail_decision_making
         RoutePlanner planner_{graph_};
         rclcpp::TimerBase::SharedPtr start_timer_;
 
+        // Current mission state
         int current_node_id_{-1};
         int current_edge_id_{-1};
         bool traversing_reverse_{false};
         bool mission_active_{false};
-        std::deque<int> route_;
+        // a deque is used here because we will be popping from the front as we traverse edges
+        std::deque<int> route_; // sequence of edge ids to traverse, in order, to reach the next uninspected edge
 
         std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
         std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
