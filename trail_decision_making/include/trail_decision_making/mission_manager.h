@@ -4,16 +4,13 @@
 #include <deque>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
-#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp" // if needed
 
-#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist.hpp"
-#include "nav2_msgs/action/navigate_through_poses.hpp"
 #include "rclcpp/rclcpp.hpp"
-#include "rclcpp_action/rclcpp_action.hpp"
 
 #include "trail_decision_making/route_planner.h"
 #include "trail_decision_making/trail_graph.h"
@@ -27,44 +24,50 @@ namespace trail_decision_making
         explicit MissionManager(const rclcpp::NodeOptions &options = rclcpp::NodeOptions());
 
     private:
-        // NavigateThroughPoses lets Nav2 follow all recorded waypoints of an edge in one goal
-        using NavigateThroughPoses = nav2_msgs::action::NavigateThroughPoses;
-        using GoalHandleNav = rclcpp_action::ClientGoalHandle<NavigateThroughPoses>;
+        enum class DriveState
+        {
+            IDLE,
+            TURNING,
+            MOVING,
+            STOPPING
+        };
 
-        // Core objects (declaration order matters: planner_ holds a reference to graph_)
+        rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
+        rclcpp::TimerBase::SharedPtr control_timer_;
+
+        DriveState drive_state_{DriveState::IDLE};
+        std::vector<Waypoint> current_path_;
+        size_t current_wp_index_{0};
+
+        double max_turn_rate_{1.0};
+        double max_speed_{1.0};
+        double angle_tolerance_{0.1};
+        double goal_tolerance_{0.2};
+
+        void startEdgeFollow(const TrailEdge &edge, bool reverse);
+        void controlLoopCallback();
+        void onEdgeFinished();
+
         TrailGraph graph_;
         RoutePlanner planner_{graph_};
-        rclcpp_action::Client<NavigateThroughPoses>::SharedPtr nav_client_;
         rclcpp::TimerBase::SharedPtr start_timer_;
 
-        // Mission state
         int current_node_id_{-1};
         int current_edge_id_{-1};
         bool traversing_reverse_{false};
         bool mission_active_{false};
-        std::deque<int> route_; // queued edge ids
+        std::deque<int> route_;
+
         std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
         std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
-        // Parameters
+
         std::string waypoints_file_;
         std::string global_frame_{"map"};
         std::string robot_frame_{"base_link"};
 
-        // Mission flow
         void loadGraph();
         void startMission();
         void chooseNextEdgeAndSendGoal();
-        void sendEdgeGoal(const TrailEdge &edge, bool reverse);
-
-        // Action callbacks
-        void goalResponseCallback(const GoalHandleNav::SharedPtr &goal_handle);
-        void feedbackCallback(
-            GoalHandleNav::SharedPtr,
-            const std::shared_ptr<const NavigateThroughPoses::Feedback> feedback);
-        void resultCallback(const GoalHandleNav::WrappedResult &result);
-
-        // Later: subscribe to obstacle / blockage topic
-        // void blockageCallback(...);
     };
 
 } // namespace trail_decision_making
