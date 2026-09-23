@@ -23,7 +23,7 @@ namespace trail_decision_making
         int otherEnd(int edge_id, int node_id) const;
 
     private:
-        const TrailGraph &graph_;
+        const TrailGraph &graph_; // Reference to the graph to plan on
     };
 
 } // namespace trail_decision_making

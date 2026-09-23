@@ -7,15 +7,15 @@
 
 namespace trail_decision_making
 {
-
+    // Node reached after traversing edge_id starting from node_id
     int RoutePlanner::otherEnd(int edge_id, int node_id) const
     {
-        const TrailEdge *e = graph_.getEdge(edge_id);
+        const TrailEdge *e = graph_.getEdge(edge_id); // trails are bidirectional, so return the other node of the edge
         if (!e)
         {
             return -1;
         }
-        return (e->from_node == node_id) ? e->to_node : e->from_node;
+        return (e->from_node == node_id) ? e->to_node : e->from_node; // trails are bidirectional
     }
 
     std::vector<int> RoutePlanner::planToNextUninspected(int start_node) const

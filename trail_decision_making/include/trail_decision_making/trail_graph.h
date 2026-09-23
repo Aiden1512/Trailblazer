@@ -2,6 +2,7 @@
 #define TRAIL_DECISION_MAKING__TRAIL_GRAPH_HPP_
 
 #include <string>
+#include <cmath>
 #include <vector>
 
 namespace trail_decision_making
@@ -39,6 +40,13 @@ namespace trail_decision_making
         EdgeStatus status{EdgeStatus::UNINSPECTED}; 
     };
 
+    struct ClosestEdgeResult
+    {
+        int edge_id{-1};
+        double distance{std::numeric_limits<double>::max()};
+        double t{0.0}; // fraction along the *whole* edge, 0 at from_node, 1 at to_node
+    };
+
     class TrailGraph
     {
     public:
@@ -64,6 +72,8 @@ namespace trail_decision_making
         double explorationPercentage() const;
 
         void resetAllEdgesToUninspected();
+        ClosestEdgeResult findClosestEdge(double x, double y) const;
+        std::pair<double, double> pointToSegment(double px, double py, double ax, double ay, double bx, double by);
 
     private:
         std::vector<TrailNode> nodes_;

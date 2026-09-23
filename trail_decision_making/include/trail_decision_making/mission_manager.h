@@ -5,7 +5,12 @@
 #include <memory>
 #include <string>
 
+#include "tf2_ros/buffer.h"
+#include "tf2_ros/transform_listener.h"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp" // if needed
+
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "geometry_msgs/msg/twist.hpp"
 #include "nav2_msgs/action/navigate_through_poses.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
@@ -38,10 +43,12 @@ namespace trail_decision_making
         bool traversing_reverse_{false};
         bool mission_active_{false};
         std::deque<int> route_; // queued edge ids
-
+        std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+        std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
         // Parameters
         std::string waypoints_file_;
         std::string global_frame_{"map"};
+        std::string robot_frame_{"base_link"};
 
         // Mission flow
         void loadGraph();

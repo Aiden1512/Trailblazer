@@ -4,19 +4,38 @@
 #include <limits>
 
 #include "yaml-cpp/yaml.h"
+#include <algorithm>
+#include <utility>
 
 namespace trail_decision_making
 {
 
-    namespace
-    {
+    // namespace
+    // {
         constexpr double kNodeMergeTolerance = 0.5; // metres, tune to your mapping output
-    }
+        std::pair<double, double> TrailGraph::pointToSegment(
+            double px, double py, double ax, double ay, double bx, double by)
+        {
+            const double dx = bx - ax;
+            const double dy = by - ay;
+            const double len2 = dx * dx + dy * dy;
+            double frac = 0.0;
+            if (len2 > 1e-9)
+            {
+                frac = ((px - ax) * dx + (py - ay) * dy) / len2;
+                frac = std::max(0.0, std::min(frac, 1.0));
+            }
+            const double cx = ax + frac * dx;
+            const double cy = ay + frac * dy;
+            return {std::hypot(px - cx, py - cy), frac};
+        }
+    // } // namespace
+
 
     bool TrailGraph::loadFromYaml(const std::string &file_path)
     {
         nodes_.clear();
-        edges_.clear();
+        edges_.clear(); 
 
         try
         {
@@ -54,9 +73,9 @@ namespace trail_decision_making
         }
         catch (const YAML::Exception &)
         {
-            return false;
+            return false; 
         }
-        return !edges_.empty();
+        return !edges_.empty(); // maybe return the edges instead of returning true/false, so the caller can check if the graph is empty
     }
 
     const TrailEdge *TrailGraph::getEdge(int edge_id) const
