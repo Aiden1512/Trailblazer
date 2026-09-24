@@ -6,7 +6,6 @@
 #include <string>
 #include <vector>
 
-#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "tf2_ros/buffer.h"
@@ -45,14 +44,14 @@ namespace trail_decision_making
         rclcpp::TimerBase::SharedPtr start_timer_;
 
         // Current mission state
-        int current_node_id_{-1};
-        int current_edge_id_{-1};
-        bool traversing_reverse_{false};
-        bool return_pass_pending_{false};
-        bool return_pass_active_{false};
-        bool mission_active_{false};
+        int current_node_id_ = -1;
+        int current_edge_id_ = -1;
+        bool traversing_reverse_ = false;
+        bool return_pass_pending_ = false;
+        bool return_pass_active_ = false;
+        bool mission_active_ = false;
         std::vector<Waypoint> current_waypoints_;
-        size_t current_waypoint_index_{0};
+        size_t current_waypoint_index_ = 0;
         // a deque is used here because we will be popping from the front as we traverse edges
         std::deque<int> route_; // sequence of edge ids to traverse, in order, to reach the next uninspected edge
 

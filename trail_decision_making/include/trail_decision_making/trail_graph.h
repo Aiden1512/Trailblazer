@@ -19,32 +19,32 @@ namespace trail_decision_making
 
     struct Waypoint
     {
-        double x{0.0};
-        double y{0.0};
-        double yaw{0.0};
+        double x = 0.0;
+        double y = 0.0;
+        double yaw = 0.0;
     };
 
     struct TrailNode
     {
-        int id{-1};
+        int id = -1; // index into TrailGraph::nodes_
         Waypoint position;
     };
 
     struct TrailEdge
     {
-        int id{-1}; // index into TrailGraph::edges_
-        int from_node{-1}; 
-        int to_node{-1};
-        std::string trail_name; 
+        int id = -1; // index into TrailGraph::edges_
+        int from_node = -1;
+        int to_node = -1;
+        std::string trail_name;
         std::vector<Waypoint> waypoints; // ordered from from_node to to_node
         EdgeStatus status{EdgeStatus::UNINSPECTED}; 
     };
 
     struct ClosestEdgeResult
     {
-        int edge_id{-1};
-        double distance{std::numeric_limits<double>::max()};
-        double t{0.0}; // fraction along the *whole* edge, 0 at from_node, 1 at to_node
+        int edge_id = -1;
+        double distance = std::numeric_limits<double>::max();
+        double t = 0.0; // fraction along the *whole* edge, 0 at from_node, 1 at to_node
     };
 
     class TrailGraph
