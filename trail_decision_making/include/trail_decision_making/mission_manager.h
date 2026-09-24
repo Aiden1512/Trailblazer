@@ -6,10 +6,12 @@
 #include <string>
 #include <vector>
 
+#include "geometry_msgs/msg/pose_stamped.hpp"
+#include "nav2_msgs/action/navigate_to_pose.hpp"
+#include "rclcpp_action/rclcpp_action.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
 
-#include "geometry_msgs/msg/twist.hpp"
 #include "rclcpp/rclcpp.hpp"
 
 #include "trail_decision_making/route_planner.h"
@@ -24,30 +26,18 @@ namespace trail_decision_making
         explicit MissionManager(const rclcpp::NodeOptions &options = rclcpp::NodeOptions());
 
     private:
-        enum class DriveState
-        {
-            IDLE,
-            TURNING,
-            MOVING,
-            STOPPING
-        };
+        using NavigateToPose = nav2_msgs::action::NavigateToPose;
+        using GoalHandleNavigateToPose = rclcpp_action::ClientGoalHandle<NavigateToPose>;
 
-        rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
-        rclcpp::TimerBase::SharedPtr control_timer_;
-
-        DriveState drive_state_{DriveState::IDLE};
-        std::vector<Waypoint> current_path_;
-        size_t current_wp_index_{0};
-
-        // Control parameters
-        double max_turn_rate_= 1.0;
-        double max_speed_ = 1.0;
-        double angle_tolerance_ = 0.1;
-        double goal_tolerance_ = 0.1;
+        rclcpp_action::Client<NavigateToPose>::SharedPtr nav_client_;
 
         // Mission control methods
         void startEdgeFollow(const TrailEdge &edge, bool reverse);
-        void controlLoopCallback();
+        void sendNextWaypoint();
+        void onNavigationFeedback(
+            GoalHandleNavigateToPose::SharedPtr,
+            const std::shared_ptr<const NavigateToPose::Feedback> feedback);
+        void onNavigationResult(const GoalHandleNavigateToPose::WrappedResult &result);
         void onEdgeFinished();
 
         TrailGraph graph_;
@@ -61,6 +51,8 @@ namespace trail_decision_making
         bool return_pass_pending_{false};
         bool return_pass_active_{false};
         bool mission_active_{false};
+        std::vector<Waypoint> current_waypoints_;
+        size_t current_waypoint_index_{0};
         // a deque is used here because we will be popping from the front as we traverse edges
         std::deque<int> route_; // sequence of edge ids to traverse, in order, to reach the next uninspected edge
 
@@ -70,6 +62,7 @@ namespace trail_decision_making
         std::string waypoints_file_;
         std::string global_frame_{"map"};
         std::string robot_frame_{"base_link"};
+        std::string nav_action_name_{"navigate_to_pose"};
 
         void loadGraph();
         void startMission();
