@@ -1,0 +1,10 @@
+/home/student/41068_ws/src/trail_object_detection/build/CMakeFiles/uninstall.dir
+/home/student/41068_ws/src/trail_object_detection/build/CMakeFiles/trail_object_detection_uninstall.dir
+/home/student/41068_ws/src/trail_object_detection/build/CMakeFiles/ground_filter.dir
+/home/student/41068_ws/src/trail_object_detection/build/CMakeFiles/test.dir
+/home/student/41068_ws/src/trail_object_detection/build/CMakeFiles/edit_cache.dir
+/home/student/41068_ws/src/trail_object_detection/build/CMakeFiles/rebuild_cache.dir
+/home/student/41068_ws/src/trail_object_detection/build/CMakeFiles/list_install_components.dir
+/home/student/41068_ws/src/trail_object_detection/build/CMakeFiles/install.dir
+/home/student/41068_ws/src/trail_object_detection/build/CMakeFiles/install/local.dir
+/home/student/41068_ws/src/trail_object_detection/build/CMakeFiles/install/strip.dir
