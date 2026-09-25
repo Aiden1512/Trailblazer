@@ -17,7 +17,7 @@ namespace trail_decision_making
         BLOCKED
     };
 
-    struct Waypoint
+    struct Waypoint // x, y, yaw in global frame
     {
         double x = 0.0;
         double y = 0.0;
@@ -30,10 +30,10 @@ namespace trail_decision_making
         Waypoint position;
     };
 
-    struct TrailEdge
+    struct TrailEdge // from_node -> to_node, with waypoints in between
     {
         int id = -1; // index into TrailGraph::edges_
-        int from_node = -1;
+        int from_node = -1; 
         int to_node = -1;
         std::string trail_name;
         std::vector<Waypoint> waypoints; // ordered from from_node to to_node
@@ -72,7 +72,6 @@ namespace trail_decision_making
         double explorationPercentage() const;
 
         void resetAllEdgesToUninspected();
-        ClosestEdgeResult findClosestEdge(double x, double y) const;
         std::pair<double, double> pointToSegment(double px, double py, double ax, double ay, double bx, double by);
 
     private:

@@ -30,6 +30,9 @@ namespace trail_decision_making
         nav_client_ = rclcpp_action::create_client<NavigateToPose>(
             this, nav_action_name_);
 
+        // TODO: Create the obstacle-status subscription here after the
+        // obstacle message type and topic have been selected.
+
         start_timer_ = create_wall_timer(1s, [this]()
                                          { startMission(); });
     }
@@ -316,6 +319,10 @@ namespace trail_decision_making
         current_node_id_ = planner_.otherEnd(current_edge_id_, current_node_id_); // update the current node to the other end of the edge so we can plan to the next uninspected edge
         chooseNextEdgeAndSendGoal();                                              // plan to the next uninspected edge and send the first waypoint of that edge
     }
+
+    // TODO: Add the obstacle callback near the Nav2 callbacks below. When an
+    // obstacle is reported, cancel the active Nav2 goal and prevent additional
+    // waypoints from being sent until the obstacle has cleared.
 
     // This method is called when we receive feedback from Nav2 about the current navigation goal.
     // It logs the current pose of the robot and the distance remaining to the goal, throttled to once every 5 seconds to avoid spamming the log.

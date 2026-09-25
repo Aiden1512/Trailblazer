@@ -8,7 +8,7 @@
 namespace trail_decision_making
 {
 
-    // Pure C++ (no ROS). Decides WHAT to inspect next; MissionManager decides HOW to drive it.
+    // Pure C++ (no ROS). Decides WHAT to inspect next; MissionManager decides HOW to drive it and trail_graph.cpp decides WHERE the waypoints are. This separation allows unit testing of the route planner without ROS.
     class RoutePlanner
     {
     public:
