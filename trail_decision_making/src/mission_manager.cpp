@@ -30,8 +30,10 @@ namespace trail_decision_making
         nav_client_ = rclcpp_action::create_client<NavigateToPose>(
             this, nav_action_name_);
 
-        // TODO: Create the obstacle-status subscription here after the
-        // obstacle message type and topic have been selected.
+        obstacle_stop_sub_ = create_subscription<std_msgs::msg::Bool>(
+            "/husky1/obstacle_stop", 10,
+            std::bind(&MissionManager::obstacleStopCallback, this, _1));
+        RCLCPP_INFO(get_logger(), "Subscribed to /husky1/obstacle_stop");
 
         start_timer_ = create_wall_timer(1s, [this]()
                                          { startMission(); });
@@ -204,6 +206,13 @@ namespace trail_decision_making
     // If we have reached the last waypoint, we call onEdgeFinished() to handle the end of the edge traversal.
     void MissionManager::sendNextWaypoint()
     {
+        if (obstacle_stop_active_)
+        {
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "Navigation paused: obstacle is inside the stop range");
+            return;
+        }
         if (current_waypoint_index_ >= current_waypoints_.size())
         {
             onEdgeFinished();
@@ -250,7 +259,9 @@ namespace trail_decision_making
             {
                 RCLCPP_ERROR(get_logger(), "Nav2 rejected the navigation goal");
                 mission_active_ = false;
+                return;
             }
+            current_goal_handle_ = goal_handle;
         };
         // send the goal to Nav2 asynchronously so we can continue processing other events while Nav2 is navigating
         options.feedback_callback = std::bind(&MissionManager::onNavigationFeedback, this, _1, _2);
@@ -267,6 +278,11 @@ namespace trail_decision_making
         // Check if the navigation was successful
         if (result.code != rclcpp_action::ResultCode::SUCCEEDED)
         {
+            if (obstacle_stop_active_)
+            {
+                RCLCPP_WARN(get_logger(), "Nav2 goal cancelled while obstacle stop is active");
+                return;
+            }
             RCLCPP_ERROR(get_logger(),
                          "Nav2 failed edge %d: action result code=%d",
                          current_edge_id_, static_cast<int>(result.code));
@@ -320,9 +336,32 @@ namespace trail_decision_making
         chooseNextEdgeAndSendGoal();                                              // plan to the next uninspected edge and send the first waypoint of that edge
     }
 
-    // TODO: Add the obstacle callback near the Nav2 callbacks below. When an
-    // obstacle is reported, cancel the active Nav2 goal and prevent additional
-    // waypoints from being sent until the obstacle has cleared.
+    void MissionManager::obstacleStopCallback(const std_msgs::msg::Bool::SharedPtr msg)
+    {
+        if (msg->data == obstacle_stop_active_) // if the obstacle stop state has not changed, we don't need to do anything
+        {
+            return;
+        }
+
+        obstacle_stop_active_ = msg->data;
+        if (obstacle_stop_active_)
+        {
+            RCLCPP_WARN(get_logger(), "Obstacle is inside the stop range; cancelling Nav2 goal");
+            if (current_goal_handle_)
+            {
+                nav_client_->async_cancel_goal(current_goal_handle_);
+                current_goal_handle_.reset();
+            }
+        }
+        else
+        {
+            RCLCPP_INFO(get_logger(), "Obstacle stop cleared; navigation may resume");
+            if (mission_active_)
+            {
+                sendNextWaypoint();
+            }
+        }
+    }
 
     // This method is called when we receive feedback from Nav2 about the current navigation goal.
     // It logs the current pose of the robot and the distance remaining to the goal, throttled to once every 5 seconds to avoid spamming the log.

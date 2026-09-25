@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "nav2_msgs/action/navigate_to_pose.hpp"
+#include "std_msgs/msg/bool.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
@@ -29,8 +30,8 @@ namespace trail_decision_making
         using GoalHandleNavigateToPose = rclcpp_action::ClientGoalHandle<NavigateToPose>;
 
         rclcpp_action::Client<NavigateToPose>::SharedPtr nav_client_;
-        // TODO: Add an obstacle-status subscription here once the obstacle
-        // message and topic are agreed with the perception/sensor component.
+        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr obstacle_stop_sub_;
+        GoalHandleNavigateToPose::SharedPtr current_goal_handle_;
 
         // Mission control methods
         void startEdgeFollow(const TrailEdge &edge, bool reverse);
@@ -40,8 +41,7 @@ namespace trail_decision_making
             const std::shared_ptr<const NavigateToPose::Feedback> feedback);
         void onNavigationResult(const GoalHandleNavigateToPose::WrappedResult &result);
         void onEdgeFinished();
-        // TODO: Add an obstacle callback here. It should stop or cancel the
-        // active Nav2 goal when the subscribed status reports an obstacle.
+        void obstacleStopCallback(const std_msgs::msg::Bool::SharedPtr msg);
 
         TrailGraph graph_;
         RoutePlanner planner_{graph_};
@@ -54,8 +54,7 @@ namespace trail_decision_making
         bool return_pass_pending_ = false;
         bool return_pass_active_ = false;
         bool mission_active_ = false;
-        // TODO: Add obstacle-stop state here if an obstacle stop must be
-        // distinguished from normal completion or navigation failure.
+        bool obstacle_stop_active_ = false;
         std::vector<Waypoint> current_waypoints_;
         size_t current_waypoint_index_ = 0;
         // a deque is used here because we will be popping from the front as we traverse edges
