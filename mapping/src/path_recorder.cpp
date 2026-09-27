@@ -8,6 +8,8 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <visualization_msgs/msg/marker.hpp>
+#include <std_msgs/msg/color_rgba.hpp>
 
 struct JunctionNode
 {
@@ -24,7 +26,7 @@ public:
     {
     
         
-        this->declare_parameter<double>("detection_radius", 1.5);
+        this->declare_parameter<double>("detection_radius", 3.0);
         this->declare_parameter<std::string>("save_file", "junction_nodes.yaml");
 
         detection_radius_ = this->get_parameter("detection_radius").as_double();
@@ -32,7 +34,7 @@ public:
 
         pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("/husky1/pose", 10, std::bind(&JunctionRecorder::poseCallback, this, std::placeholders::_1));
         map_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>("/husky1/map", 10, std::bind(&JunctionRecorder::mapCallback, this, std::placeholders::_1));
-
+        ray_marker_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/husky1/junction_rays", 10);
         RCLCPP_INFO(this->get_logger(), "Junction recorder started.");
     }
 
@@ -46,18 +48,17 @@ private:
 
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pose_sub_;
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
-    
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr ray_marker_pub_;
     nav_msgs::msg::OccupancyGrid::SharedPtr latest_map_;
     std::vector<JunctionNode> nodes_;
 
     double detection_radius_; //How far from the robot to check for open paths
     double angle_resolution_deg_ = 5.0; //Angle frequency of checks for open paths 
     double ray_step_ = 0.10; //Distance between samples along each ray
-    double minimum_opening_deg_ = 10.0; //Minimum size of an opening
+    double minimum_opening_deg_ = 25.0; //Minimum size of an opening
     double minimum_node_distance_ = 1.5; //Minimum distance between nodes
     int confirmation_required_ = 3; //Number of consecutive detections required to be considered a node
     int occupied_threshold_ = 50; //How confident before consider occupancy map occupied
-
     int consecutive_detections_ = 0;
     std::string save_file_;
 
@@ -100,65 +101,119 @@ private:
         }
     }
 
-    int detectOpenings(double robot_x, double robot_y)
+   int detectOpenings(double robot_x, double robot_y)
+{
+    int number_of_rays =
+        static_cast<int>(360.0 / angle_resolution_deg_);
+
+    std::vector<bool> ray_is_open(number_of_rays, false);
+
+    // Marker containing all of our rays
+    visualization_msgs::msg::Marker marker;
+
+    marker.header.frame_id = "husky1_map";
+    marker.header.stamp = this->now();
+
+    marker.ns = "junction_detection";
+    marker.id = 0;
+
+    marker.type = visualization_msgs::msg::Marker::LINE_LIST;
+    marker.action = visualization_msgs::msg::Marker::ADD;
+    marker.scale.x = 0.02;
+
+  
+    for (int i = 0; i < number_of_rays; i++)
     {
-        int number_of_rays = static_cast<int>(360.0 / angle_resolution_deg_);
-        
-        std::vector<bool> ray_is_open(number_of_rays, false);
+        double angle_deg = i * angle_resolution_deg_;
 
-        // Check every direction around the robot.
-        for (int i = 0; i < number_of_rays; i++)
+        double angle_rad = angle_deg * M_PI / 180.0;
+
+        bool open = isDirectionOpen(robot_x, robot_y, angle_rad);
+        ray_is_open.at(i) = open;
+
+        // Start of ray
+        geometry_msgs::msg::Point start;
+
+        start.x = robot_x;
+        start.y = robot_y;
+        start.z = 0.1;
+
+        // End of ray
+        geometry_msgs::msg::Point end;
+
+        end.x = robot_x + detection_radius_ * std::cos(angle_rad);
+        end.y = robot_y + detection_radius_ * std::sin(angle_rad);
+        end.z = 0.1;
+
+        std_msgs::msg::ColorRGBA colour;
+
+        if (open)
         {
-            double angle_deg = i * angle_resolution_deg_;
-
-            double angle_rad = angle_deg * M_PI / 180.0;
-
-            ray_is_open.at(i) = isDirectionOpen(robot_x, robot_y, angle_rad);
+            // Green, algorithm thinks this direction is open
+            colour.r = 0.0;
+            colour.g = 1.0;
+            colour.b = 0.0;
+            colour.a = 1.0;
+        }
+        else
+        {
+            // Red, algorithm thinks this direction is blocked
+            colour.r = 1.0;
+            colour.g = 0.0;
+            colour.b = 0.0;
+            colour.a = 1.0;
         }
 
-        // Count groups of consecutive open rays.
-        int openings = countOpenSectors(ray_is_open);
-        return openings;
+        marker.colors.push_back(colour);
+        marker.colors.push_back(colour);
+
+        marker.points.push_back(start);
+        marker.points.push_back(end);
     }
 
-    bool isDirectionOpen(double robot_x, double robot_y, double angle)
+    ray_marker_pub_->publish(marker);
+
+    return countOpenSectors(ray_is_open);
+}
+
+bool isDirectionOpen(double robot_x, double robot_y, double angle)
+{
+    for (double distance = ray_step_; distance <= detection_radius_; distance += ray_step_)
     {
-        //If we reach detection_radius without hitting blocked or undetermined space the direction is considered open
+        double world_x = robot_x + distance * std::cos(angle);
+        double world_y = robot_y + distance * std::sin(angle);
 
-        for (double distance = ray_step_; distance <= detection_radius_; distance += ray_step_)
+        int grid_x;
+        int grid_y;
+
+        if (!worldToGrid(world_x, world_y, grid_x, grid_y))
         {
-            double world_x = robot_x + distance * std::cos(angle);
-            double world_y = robot_y + distance * std::sin(angle);
-
-            int grid_x;
-            int grid_y;
-
-            if (!worldToGrid(world_x, world_y, grid_x, grid_y))
-            {
-                return false;
-            }
-
-            int index = grid_y * latest_map_->info.width + grid_x;
-
-            int8_t value = latest_map_->data[index];
-
-
-            // -1 means SLAM has not mapped this cell yet.
-            if (value == -1)
-            {
-                return false;
-            }
-            // Occupied cell
-            if (value >= occupied_threshold_)
-            {
-                return false;
-            }
+            return false;
         }
-        // Nothing blocked the ray.
-        return true;
+
+        int index = grid_y * latest_map_->info.width + grid_x;
+        int8_t value = latest_map_->data[index];
+
+        // Unknown map cell
+        if (value == -1)
+        {
+            return false;
+        }
+
+        // Occupied map cell
+        if (value >= occupied_threshold_)
+        {
+            return false;
+        }
     }
 
+    return true;
+}
+    
 
+
+
+   
     int countOpenSectors(const std::vector<bool> &open_rays)
     {
         if (open_rays.empty()) {return 0;}
