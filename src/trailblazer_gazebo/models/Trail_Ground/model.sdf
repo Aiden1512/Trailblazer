@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+
+<sdf version="1.7">
+
+  <model name="Trail_Ground">
+
+    <static>true</static>
+
+    <link name="ground_link">
+
+      <collision name="collision">
+        <geometry>
+          <plane>
+            <normal>0 0 1</normal>
+            <size>15 15</size>
+          </plane>
+        </geometry>
+      </collision>
+
+      <visual name="visual">
+
+        <geometry>
+          <plane>
+            <normal>0 0 1</normal>
+            <size>15 15</size>
+          </plane>
+        </geometry>
+
+        <material>
+          <script>
+            <uri>model://Trail_Ground/Materials/Scripts</uri>
+            <uri>model://Trail_Ground/Materials/Textures</uri>
+            <name>Trailblazer/TrailGround</name>
+          </script>
+        </material>
+
+      </visual>
+
+    </link>
+
+  </model>
+
+</sdf>
