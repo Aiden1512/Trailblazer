@@ -26,7 +26,7 @@ public:
     {
     
         
-        this->declare_parameter<double>("detection_radius", 3.0);
+        this->declare_parameter<double>("detection_radius", 2.0);
         this->declare_parameter<std::string>("save_file", "junction_nodes.yaml");
 
         detection_radius_ = this->get_parameter("detection_radius").as_double();
@@ -195,10 +195,10 @@ bool isDirectionOpen(double robot_x, double robot_y, double angle)
         int8_t value = latest_map_->data[index];
 
         // Unknown map cell
-        if (value == -1)
-        {
-            return false;
-        }
+        //if (value == -1)
+        //{
+        //    return false;
+        //}
 
         // Occupied map cell
         if (value >= occupied_threshold_)
