@@ -22,7 +22,17 @@ ament_target_dependencies(path_recorder
   std_msgs
 )
 
+add_executable(husky_wasd_node src/husky_wasd.cpp)
+ament_target_dependencies(
+  husky_wasd_node
+  rclcpp
+  geometry_msgs
+)
 
+install(TARGETS
+  husky_wasd_node
+  DESTINATION lib/${PROJECT_NAME}
+)
 install(TARGETS
   path_recorder
   DESTINATION lib/${PROJECT_NAME}
