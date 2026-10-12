@@ -1,9 +1,7 @@
 <?xml version="1.0"?>
-
-<sdf version="1.7">
+<sdf version="1.8">
 
   <model name="Trail_Ground">
-
     <static>true</static>
 
     <link name="ground_link">
@@ -18,7 +16,6 @@
       </collision>
 
       <visual name="visual">
-
         <geometry>
           <plane>
             <normal>0 0 1</normal>
@@ -26,18 +23,20 @@
           </plane>
         </geometry>
 
-        <material>
-          <script>
-            <uri>model://Trail_Ground/Materials/Scripts</uri>
-            <uri>model://Trail_Ground/Materials/Textures</uri>
-            <name>Trailblazer/TrailGround</name>
-          </script>
-        </material>
+      <material>
+        <ambient>1 1 1 1</ambient>
+        <diffuse>1 1 1 1</diffuse>
+        <pbr>
+          <metal>
+            <albedo_map>model://Trail_Ground/Materials/Textures/Floor_Texture.png</albedo_map>
+            <metalness>0.0</metalness>
+            <roughness>1.0</roughness>
+          </metal>
+        </pbr>
+      </material>
 
       </visual>
-
     </link>
-
   </model>
 
 </sdf>
