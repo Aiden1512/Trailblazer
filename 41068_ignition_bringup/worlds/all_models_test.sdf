@@ -1,0 +1,153 @@
+<?xml version="1.0" ?>
+<sdf version="1.7">
+
+  <world name="all_models_test">
+
+    <gravity>0 0 -9.81</gravity>
+
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+
+    <!-- ROW 1 -->
+
+    <include>
+      <uri>model://Birch</uri>
+      <name>Birch_test</name>
+      <pose>0 0 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Birch2</uri>
+      <name>Birch2_test</name>
+      <pose>10 0 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Brown_Rock</uri>
+      <name>Brown_Rock_test</name>
+      <pose>20 0 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Brown_Rock2</uri>
+      <name>Brown_Rock2_test</name>
+      <pose>30 0 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Daffodil</uri>
+      <name>Daffodil_test</name>
+      <pose>40 0 0 0 0 0</pose>
+    </include>
+
+
+    <!-- ROW 2 -->
+
+    <include>
+      <uri>model://Grass</uri>
+      <name>Grass_test</name>
+      <pose>30 10 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Grass2</uri>
+      <name>Grass2_test</name>
+      <pose>40 10 0 0 0 0</pose>
+    </include>
+
+
+    <!-- ROW 3 -->
+
+    <include>
+      <uri>model://Grey_Rock</uri>
+      <name>Grey_Rock_test</name>
+      <pose>0 20 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Grey_Rock2</uri>
+      <name>Grey_Rock2_test</name>
+      <pose>10 20 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Floor_Path</uri>
+      <name>Floor_Path_test</name>
+      <pose>20 20 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Large_Fence</uri>
+      <name>Large_Fence_test</name>
+      <pose>30 20 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Small_Fence</uri>
+      <name>Small_Fence_test</name>
+      <pose>40 20 0 0 0 0</pose>
+    </include>
+
+
+    <!-- ROW 4 -->
+
+    <include>
+      <uri>model://Orange_Mushroom</uri>
+      <name>Orange_Mushroom_test</name>
+      <pose>20 30 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Orange_Mushroom2</uri>
+      <name>Orange_Mushroom2_test</name>
+      <pose>30 30 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Pebbles</uri>
+      <name>Pebbles_test</name>
+      <pose>40 30 0 0 0 0</pose>
+    </include>
+
+
+    <!-- ROW 5 -->
+
+    <include>
+      <uri>model://Pebbles2</uri>
+      <name>Pebbles2_test</name>
+      <pose>0 40 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Purple_Mushroom</uri>
+      <name>Purple_Mushroom_test</name>
+      <pose>10 40 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Purple_Mushroom2</uri>
+      <name>Purple_Mushroom2_test</name>
+      <pose>20 40 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Sunflower</uri>
+      <name>Sunflower_test</name>
+      <pose>30 40 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Tree</uri>
+      <name>Tree_test</name>
+      <pose>40 40 0 0 0 0</pose>
+    </include>
+
+  </world>
+
+</sdf>

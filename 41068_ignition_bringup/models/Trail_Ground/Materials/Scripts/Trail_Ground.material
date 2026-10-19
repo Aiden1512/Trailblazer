@@ -1,0 +1,15 @@
+material Trailblazer/TrailGround
+{
+  technique
+  {
+    pass
+    {
+      lighting off
+
+      texture_unit
+      {
+        texture Floor_Texture.png
+      }
+    }
+  }
+}
