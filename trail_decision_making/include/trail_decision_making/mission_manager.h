@@ -55,6 +55,7 @@ namespace trail_decision_making
         bool return_pass_active_ = false;
         bool mission_active_ = false;
         bool obstacle_stop_active_ = false;
+        bool rotation_goal_active_ = false;
         std::vector<Waypoint> current_waypoints_;
         size_t current_waypoint_index_ = 0;
         // a deque is used here because we will be popping from the front as we traverse edges

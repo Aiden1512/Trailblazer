@@ -225,30 +225,62 @@ namespace trail_decision_making
             mission_active_ = false;
             return;
         }
-        // Get the current waypoint to navigate to
+        // Align with the waypoint before driving when the heading error is significant.
         const auto &waypoint = current_waypoints_[current_waypoint_index_];
+        geometry_msgs::msg::TransformStamped transform;
+        try
+        {
+            transform = tf_buffer_->lookupTransform(
+                global_frame_, robot_frame_, tf2::TimePointZero);
+        }
+        catch (const tf2::TransformException &ex)
+        {
+            RCLCPP_WARN(get_logger(), "Could not get pose before waypoint: %s", ex.what());
+            return;
+        }
+
+        const double dx = waypoint.x - transform.transform.translation.x;
+        const double dy = waypoint.y - transform.transform.translation.y;
+        const double target_yaw = std::atan2(dy, dx);
+        const auto &current_rotation = transform.transform.rotation;
+        const double current_yaw = std::atan2(
+            2.0 * (current_rotation.w * current_rotation.z +
+                   current_rotation.x * current_rotation.y),
+            1.0 - 2.0 * (current_rotation.y * current_rotation.y +
+                         current_rotation.z * current_rotation.z));
+        const double yaw_error = std::atan2(
+            std::sin(target_yaw - current_yaw),
+            std::cos(target_yaw - current_yaw));
+        const bool start_rotation = !rotation_goal_active_ && std::fabs(yaw_error) > 0.35;
+
         NavigateToPose::Goal goal;
         goal.pose.header.frame_id = global_frame_;
         goal.pose.header.stamp = now();
-        goal.pose.pose.position.x = waypoint.x;
-        goal.pose.pose.position.y = waypoint.y;
-        double target_yaw = waypoint.yaw;
-        // If we are not at the last waypoint, we can set the target yaw to face the next waypoint, so the robot is oriented correctly when it reaches the next waypoint
-        if (current_waypoint_index_ + 1 < current_waypoints_.size())
-        {
-            const auto &next_waypoint = current_waypoints_[current_waypoint_index_ + 1];
-            target_yaw = std::atan2(
-                next_waypoint.y - waypoint.y,
-                next_waypoint.x - waypoint.x);
-        }
-        // Set the orientation of the goal pose using the target yaw angle
+        goal.pose.pose.position.x = start_rotation
+                                        ? transform.transform.translation.x
+                                        : waypoint.x;
+        goal.pose.pose.position.y = start_rotation
+                                        ? transform.transform.translation.y
+                                        : waypoint.y;
+
         tf2::Quaternion orientation;
         orientation.setRPY(0.0, 0.0, target_yaw);
         goal.pose.pose.orientation = tf2::toMsg(orientation);
 
-        RCLCPP_INFO(get_logger(), "Sending edge %d waypoint %zu/%zu: (%.2f, %.2f)",
-                    current_edge_id_, current_waypoint_index_ + 1,
-                    current_waypoints_.size(), waypoint.x, waypoint.y);
+        if (start_rotation)
+        {
+            rotation_goal_active_ = true;
+            RCLCPP_INFO(get_logger(),
+                        "Turning in place %.2f rad before edge %d waypoint %zu/%zu",
+                        yaw_error, current_edge_id_, current_waypoint_index_ + 1,
+                        current_waypoints_.size());
+        }
+        else
+        {
+            RCLCPP_INFO(get_logger(), "Sending edge %d waypoint %zu/%zu: (%.2f, %.2f)",
+                        current_edge_id_, current_waypoint_index_ + 1,
+                        current_waypoints_.size(), waypoint.x, waypoint.y);
+        }
 
         // Send the goal to Nav2 and set up callbacks for feedback and result
         rclcpp_action::Client<NavigateToPose>::SendGoalOptions options;
@@ -287,6 +319,13 @@ namespace trail_decision_making
                          "Nav2 failed edge %d: action result code=%d",
                          current_edge_id_, static_cast<int>(result.code));
             mission_active_ = false;
+            return;
+        }
+
+        if (rotation_goal_active_)
+        {
+            rotation_goal_active_ = false;
+            sendNextWaypoint();
             return;
         }
 
