@@ -23,6 +23,8 @@ namespace trail_decision_making
         robot_frame_ = declare_parameter<std::string>("robot_frame", "base_link");
         nav_action_name_ = declare_parameter<std::string>(
             "nav_action_name", "navigate_to_pose");
+        max_goal_retries_ = declare_parameter<int>("max_goal_retries", 3);
+        retry_delay_sec_ = declare_parameter<double>("retry_delay_sec", 2.0);
 
         // Initialize TF buffer and listener, and the navigation action client
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
@@ -157,7 +159,7 @@ namespace trail_decision_making
         }
 
         // Thin the waypoints to avoid sending too many navigation goals to Nav2.
-        // We want to keep the first and last waypoints, and any waypoint that is at least 0.6 m away from the previous one.
+        // Keep the first and last waypoints and thin intermediate goals to 1.2 m spacing.
         // This is to avoid sending too many navigation goals to Nav2, which can cause it to fail or take a long time to plan.
         std::vector<Waypoint> thinned;
         thinned.push_back(waypoints.front());
@@ -165,7 +167,7 @@ namespace trail_decision_making
         {
             const double dx = waypoints[index].x - thinned.back().x;
             const double dy = waypoints[index].y - thinned.back().y;
-            if (std::hypot(dx, dy) >= 0.6)
+            if (std::hypot(dx, dy) >= 1.2)
             {
                 thinned.push_back(waypoints[index]);
             }
@@ -179,18 +181,28 @@ namespace trail_decision_making
 
         current_waypoints_ = thinned;
         size_t first_waypoint = 0;
+        transit_to_edge_start_ = false;
         try
-        { // check if the robot is already close to the first waypoint, and if so, skip it to avoid sending a navigation goal that is too close to the current pose
+        {
             const auto pose = tf_buffer_->lookupTransform(
                 global_frame_, robot_frame_, tf2::TimePointZero);
             const double dx = thinned.front().x - pose.transform.translation.x;
             const double dy = thinned.front().y - pose.transform.translation.y;
-            if (std::hypot(dx, dy) < 0.5 && current_waypoints_.size() > 1)
+            const double distance_to_entry = std::hypot(dx, dy);
+            if (distance_to_entry < 0.5 && current_waypoints_.size() > 1)
             {
                 first_waypoint = 1;
                 RCLCPP_INFO(get_logger(),
                             "Skipping edge %d start waypoint; robot is %.2f m from it",
-                            edge.id, std::hypot(dx, dy));
+                            edge.id, distance_to_entry);
+            }
+            else if (distance_to_entry >= 0.5)
+            {
+                transit_to_edge_start_ = true;
+                RCLCPP_INFO(get_logger(),
+                            "Transiting %.2f m to edge %d entry waypoint (%.2f, %.2f)",
+                            distance_to_entry, edge.id,
+                            thinned.front().x, thinned.front().y);
             }
         }
         catch (const tf2::TransformException &ex)
@@ -198,6 +210,7 @@ namespace trail_decision_making
             RCLCPP_WARN(get_logger(), "Could not check current pose before navigation: %s", ex.what());
         }
 
+        goal_retry_count_ = 0;
         current_waypoint_index_ = first_waypoint; // set the current waypoint index to the first waypoint we want to navigate to
         sendNextWaypoint();                       // send the first waypoint to Nav2 to start navigating the edge
     }
@@ -225,7 +238,6 @@ namespace trail_decision_making
             mission_active_ = false;
             return;
         }
-        // Align with the waypoint before driving when the heading error is significant.
         const auto &waypoint = current_waypoints_[current_waypoint_index_];
         geometry_msgs::msg::TransformStamped transform;
         try
@@ -242,38 +254,21 @@ namespace trail_decision_making
         const double dx = waypoint.x - transform.transform.translation.x;
         const double dy = waypoint.y - transform.transform.translation.y;
         const double target_yaw = std::atan2(dy, dx);
-        const auto &current_rotation = transform.transform.rotation;
-        const double current_yaw = std::atan2(
-            2.0 * (current_rotation.w * current_rotation.z +
-                   current_rotation.x * current_rotation.y),
-            1.0 - 2.0 * (current_rotation.y * current_rotation.y +
-                         current_rotation.z * current_rotation.z));
-        const double yaw_error = std::atan2(
-            std::sin(target_yaw - current_yaw),
-            std::cos(target_yaw - current_yaw));
-        const bool start_rotation = !rotation_goal_active_ && std::fabs(yaw_error) > 0.35;
 
         NavigateToPose::Goal goal;
         goal.pose.header.frame_id = global_frame_;
         goal.pose.header.stamp = now();
-        goal.pose.pose.position.x = start_rotation
-                                        ? transform.transform.translation.x
-                                        : waypoint.x;
-        goal.pose.pose.position.y = start_rotation
-                                        ? transform.transform.translation.y
-                                        : waypoint.y;
+        goal.pose.pose.position.x = waypoint.x;
+        goal.pose.pose.position.y = waypoint.y;
 
         tf2::Quaternion orientation;
         orientation.setRPY(0.0, 0.0, target_yaw);
         goal.pose.pose.orientation = tf2::toMsg(orientation);
 
-        if (start_rotation)
+        if (transit_to_edge_start_ && current_waypoint_index_ == 0)
         {
-            rotation_goal_active_ = true;
-            RCLCPP_INFO(get_logger(),
-                        "Turning in place %.2f rad before edge %d waypoint %zu/%zu",
-                        yaw_error, current_edge_id_, current_waypoint_index_ + 1,
-                        current_waypoints_.size());
+            RCLCPP_INFO(get_logger(), "Sending transit goal to edge %d entry waypoint",
+                        current_edge_id_);
         }
         else
         {
@@ -315,6 +310,27 @@ namespace trail_decision_making
                 RCLCPP_WARN(get_logger(), "Nav2 goal cancelled while obstacle stop is active");
                 return;
             }
+            // An abort is often transient (e.g. stale costmap cells around the robot
+            // making the planner fail), so resend the same waypoint a few times
+            // before giving up on the edge.
+            if (result.code == rclcpp_action::ResultCode::ABORTED &&
+                goal_retry_count_ < max_goal_retries_)
+            {
+                ++goal_retry_count_;
+                RCLCPP_WARN(get_logger(),
+                            "Nav2 aborted edge %d waypoint %zu; retrying in %.1f s (%d/%d)",
+                            current_edge_id_, current_waypoint_index_ + 1,
+                            retry_delay_sec_, goal_retry_count_, max_goal_retries_);
+                retry_timer_ = create_wall_timer(
+                    std::chrono::duration<double>(retry_delay_sec_), [this]()
+                    {
+                        retry_timer_->cancel();
+                        if (mission_active_ && !obstacle_stop_active_)
+                        {
+                            sendNextWaypoint();
+                        } });
+                return;
+            }
             RCLCPP_ERROR(get_logger(),
                          "Nav2 failed edge %d: action result code=%d",
                          current_edge_id_, static_cast<int>(result.code));
@@ -322,13 +338,8 @@ namespace trail_decision_making
             return;
         }
 
-        if (rotation_goal_active_)
-        {
-            rotation_goal_active_ = false;
-            sendNextWaypoint();
-            return;
-        }
-
+        goal_retry_count_ = 0;
+        transit_to_edge_start_ = false;
         ++current_waypoint_index_;
         // If we have not reached the last waypoint, send the next waypoint to Nav2.
         if (current_waypoint_index_ < current_waypoints_.size())
@@ -408,12 +419,21 @@ namespace trail_decision_making
         GoalHandleNavigateToPose::SharedPtr,
         const std::shared_ptr<const NavigateToPose::Feedback> feedback)
     {
+        const auto &waypoint = current_waypoints_[current_waypoint_index_];
+        const auto &q = feedback->current_pose.pose.orientation;
+        const double yaw = std::atan2(2.0 * (q.w * q.z + q.x * q.y),
+                                      1.0 - 2.0 * (q.y * q.y + q.z * q.z));
         RCLCPP_INFO_THROTTLE(
             get_logger(), *get_clock(), 5000,
-            "Nav2 edge %d waypoint %zu: current pose (%.2f, %.2f), distance remaining %.2f m",
-            current_edge_id_, current_waypoint_index_ + 1,
+            "Nav2 edge %d waypoint %zu (%.2f, %.2f): current pose (%.2f, %.2f, %.2f), distance remaining %.2f m",
+            current_edge_id_,
+            current_waypoint_index_ + 1,
+            waypoint.x,
+            waypoint.y,
             feedback->current_pose.pose.position.x,
-            feedback->current_pose.pose.position.y, feedback->distance_remaining);
+            feedback->current_pose.pose.position.y,
+            yaw * 180.0 / M_PI,
+            feedback->distance_remaining);
     }
 
 } // namespace trail_decision_making

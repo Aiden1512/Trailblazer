@@ -46,6 +46,7 @@ namespace trail_decision_making
         TrailGraph graph_;
         RoutePlanner planner_{graph_};
         rclcpp::TimerBase::SharedPtr start_timer_;
+        rclcpp::TimerBase::SharedPtr retry_timer_;
 
         // Current mission state
         int current_node_id_ = -1;
@@ -55,9 +56,12 @@ namespace trail_decision_making
         bool return_pass_active_ = false;
         bool mission_active_ = false;
         bool obstacle_stop_active_ = false;
-        bool rotation_goal_active_ = false;
+        bool transit_to_edge_start_ = false;
         std::vector<Waypoint> current_waypoints_;
         size_t current_waypoint_index_ = 0;
+        int goal_retry_count_ = 0; // consecutive aborts of the current waypoint
+        int max_goal_retries_ = 3;
+        double retry_delay_sec_ = 2.0;
         // a deque is used here because we will be popping from the front as we traverse edges
         std::deque<int> route_; // sequence of edge ids to traverse, in order, to reach the next uninspected edge
 

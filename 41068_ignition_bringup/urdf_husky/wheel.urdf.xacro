@@ -40,5 +40,13 @@
       <dynamics damping="0.004"/>
     </joint>
 
+    <!-- The base is driven by VelocityControl, not by wheel torque, so the wheels
+         need no grip. Default friction (mu=1) makes the wheels scrub sideways and
+         blocks turning on the spot; keep it low so in-place rotation is possible. -->
+    <gazebo reference="${prefix}${wheel_id}_wheel_link">
+      <mu1>0.05</mu1>
+      <mu2>0.05</mu2>
+    </gazebo>
+
   </xacro:macro>
 </robot>
