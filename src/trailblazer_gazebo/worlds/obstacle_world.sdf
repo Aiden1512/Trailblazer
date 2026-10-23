@@ -1,0 +1,203 @@
+<?xml version="1.0"?>
+<sdf version='1.8'>
+
+  <world name="trail_world">
+    <!-- Basic world setup  -->
+    <light name="sun" type="directional">
+      <cast_shadows>1</cast_shadows>
+      <pose>0 0 10 0 -0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+    <gravity>0 0 -9.81</gravity>
+    <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
+    <atmosphere type="adiabatic"/>
+    <physics name="default_physics" type="ignored">
+      <max_step_size>0.01</max_step_size>
+      <real_time_factor>1</real_time_factor>
+      <real_time_update_rate>100</real_time_update_rate>
+    </physics>
+    <scene>
+      <ambient>1.0 1.0 1.0</ambient>
+      <background>0.8 0.8 0.8</background>
+      <shadows>1</shadows>
+    </scene>
+
+    <!-- Initialise spherical coordinates somewhere -->
+    <spherical_coordinates>
+      <latitude_deg>0.0</latitude_deg>
+      <longitude_deg>0.0</longitude_deg>
+      <elevation>10.0</elevation>
+      <heading_deg>0</heading_deg>
+      <surface_model>EARTH_WGS84</surface_model>
+    </spherical_coordinates>
+
+    <gravity>0 0 -9.81</gravity>
+
+    <include>
+      <uri>model://Trail_Ground</uri>
+      <name>trail_ground</name>
+      <pose>0 0 0 0 0 0</pose>
+    </include>
+    
+    <!-- Birch Trees -->
+    <include>
+      <uri>model://Birch</uri>
+      <name>Birch</name>
+      <pose>-1.2 0.3 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Birch</uri>
+      <name>Birch-1</name>
+      <pose>-1.5 6 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Birch</uri>
+      <name>Birch-2</name>
+      <pose>5.6 6.4 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Birch</uri>
+      <name>Birch-3</name>
+      <pose>6.6 -1.4 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Birch</uri>
+      <name>Birch-4</name>
+      <pose>-0.4 -6.6 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Birch</uri>
+      <name>Birch-7</name>
+      <pose>-5.4 5 0 0 0 0</pose>
+    </include>
+
+    <!-- Birch2 Trees -->
+    <include>
+      <uri>model://Birch2</uri>
+      <name>Birch2-1</name>
+      <pose>-2 1 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Birch2</uri>
+      <name>Birch2-2</name>
+      <pose>-1.4 6.6 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Birch2</uri>
+      <name>Birch2-3</name>
+      <pose>6 5.2 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Birch2</uri>
+      <name>Birch2-4</name>
+      <pose>4 -2 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Birch2</uri>
+      <name>Birch2-5</name>
+      <pose>1 -4 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Birch2</uri>
+      <name>Birch2-7</name>
+      <pose>-6.8 -3.6 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Birch2</uri>
+      <name>Birch2-8</name>
+      <pose>7.2 -3.4 0 0 0 0</pose>
+    </include>
+
+    <!-- Trees -->
+    <include>
+      <uri>model://Tree</uri>
+      <name>Tree</name>
+      <pose>-2 4 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Tree</uri>
+      <name>Tree-3</name>
+      <pose>7 2 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Tree</uri>
+      <name>Tree-6</name>
+      <pose>3.5 -2.7 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Tree</uri>
+      <name>Tree-7</name>
+      <pose>-3 -6.6 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Tree</uri>
+      <name>Tree-8</name>
+      <pose>-5.4 -6.6 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Tree</uri>
+      <name>Tree-10</name>
+      <pose>-6 -0.2 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Tree</uri>
+      <name>Tree-12</name>
+      <pose>-5.4 0.2 0 0 0 0</pose>
+    </include>
+
+    <!-- Grey Rock-->
+    <include>
+      <uri>model://Grey_Rock</uri>
+      <name>Grey_Rock-1</name>
+      <pose>1.8 -2.8 0 0 0 0</pose>
+    </include>
+
+    <!-- Grey Rock2-->
+    <include>
+      <uri>model://Grey_Rock2</uri>
+      <name>Grey_Rock2</name>
+      <pose>-4 -2 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Grey_Rock2</uri>
+      <name>Grey_Rock2-1</name>
+      <pose>6 -6 0 0 0 0</pose>
+    </include>
+
+    <!-- Obstacle -->
+    <include>
+      <uri>model://Brown_Rock</uri>
+      <name>Brown_Rock</name>
+      <pose>0.75 5.25 0 0 0 0</pose>
+    </include>
+
+
+  </world>
+
+</sdf>
