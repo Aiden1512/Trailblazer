@@ -24,6 +24,10 @@ Needs ROS 2 sourced in the terminal (to read the robot's position) and the
 simulation running (ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py).
 Without them the GUI still opens and says what's missing.
 
+Phase 2 also shows the real robot's status: obstacle warn/stop from the
+obstacle detector, the mission manager's progress, and the obstacle snapshot
+from /husky1/obstacle_image.
+
 The live camera panel is on hold: set TRAILBLAZER_CAMERA=1 to switch it back on.
 
 Run with:
@@ -34,6 +38,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 import state as state_module
+from camera_feed import CameraFeed, SNAPSHOT_TOPIC
+from mission_status import MissionStatusFeed
 from phase1_teleop import Phase1Frame
 from phase2_inspection import Phase2Frame
 from robot_pose import RobotPoseFeed, DEFAULT_TOPIC as DEFAULT_ODOM_TOPIC
@@ -67,9 +73,14 @@ class TrailBlazerApp:
         self.pose_feed.start()
         self.camera_feed = None
         if SHOW_CAMERA:
-            from camera_feed import CameraFeed, DEFAULT_TOPIC as DEFAULT_CAMERA_TOPIC
+            from camera_feed import DEFAULT_TOPIC as DEFAULT_CAMERA_TOPIC
             self.camera_feed = CameraFeed(os.environ.get("TRAILBLAZER_CAMERA_TOPIC", DEFAULT_CAMERA_TOPIC))
             self.camera_feed.start()
+        self.status_feed = MissionStatusFeed()
+        self.status_feed.start()
+        self.snapshot_feed = CameraFeed(os.environ.get("TRAILBLAZER_SNAPSHOT_TOPIC", SNAPSHOT_TOPIC),
+                                        snapshot=True)
+        self.snapshot_feed.start()
         self.obstacle_spawner = SimObstacleSpawner()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -83,7 +94,8 @@ class TrailBlazerApp:
 
             self.phase2 = Phase2Frame(self.notebook, self.state, on_back=self.show_start,
                                       pose_feed=self.pose_feed, spawner=self.obstacle_spawner,
-                                      camera_feed=self.camera_feed)
+                                      camera_feed=self.camera_feed, status_feed=self.status_feed,
+                                      snapshot_feed=self.snapshot_feed)
             self.phase1 = Phase1Frame(self.notebook, self.state, on_finish_mapping=self._go_to_phase2,
                                       on_back=self.show_start, pose_feed=self.pose_feed,
                                       on_reset=self.phase2.clear_obstacles, camera_feed=self.camera_feed)
@@ -147,6 +159,8 @@ class TrailBlazerApp:
     # ---------------- shutdown ----------------
     def _stop_feeds(self):
         self.pose_feed.stop()
+        self.status_feed.stop()
+        self.snapshot_feed.stop()
         if self.camera_feed is not None:
             self.camera_feed.stop()
 

@@ -50,7 +50,8 @@ def _make_placeholder(width, height, text="NO SIGNAL"):
 
 
 class CameraPanel(ttk.Frame):
-    def __init__(self, parent, feed, width=300, height=200, title="Live Camera"):
+    def __init__(self, parent, feed, width=300, height=200, title="Live Camera",
+                 placeholder_text="NO SIGNAL"):
         super().__init__(parent)
         self.feed = feed
         self.box_w = width
@@ -60,7 +61,7 @@ class CameraPanel(ttk.Frame):
 
         ttk.Label(self, text=title, font=("Arial", 11, "bold")).pack(anchor="w")
 
-        self._placeholder = ImageTk.PhotoImage(_make_placeholder(width, height))
+        self._placeholder = ImageTk.PhotoImage(_make_placeholder(width, height, placeholder_text))
         self._photo = self._placeholder
         self.image_label = tk.Label(self, image=self._placeholder, bg="#111111",
                                     bd=1, relief="sunken")

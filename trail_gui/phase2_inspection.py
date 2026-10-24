@@ -15,6 +15,11 @@ playback on the map (it does not drive the robot).
 Placing an obstacle on the map also places a real obstacle in the simulation
 (see sim_obstacles.py); "Clear Obstacles" removes them again.
 
+The Robot Status section shows the real robot's state, independent of the
+playback: the obstacle detector's warn/stop flags, the mission manager's
+latest status line, and the camera snapshot taken when an obstacle stop
+activates (see mission_status.py and camera_feed.py).
+
 Swap-out point for the real system: `_arrive_at_edge_end` currently checks
 a simple point-to-line distance against manually placed obstacle markers.
 Once real perception / obstacle-detection is available, replace that check
@@ -34,15 +39,33 @@ POLL_MS = 100              # how often the real robot position / simulation mess
 TRAVEL_SPEED = 5           # cm per tick
 OBSTACLE_CLEARANCE = 18    # cm; an edge counts as blocked if an obstacle is this close to it
 
+# Real obstacle detector state (mission_status.py) -> banner text/colour and log line.
+OBSTACLE_BANNER = {
+    "clear": ("CLEAR - no obstacle ahead", "#2e7d32"),
+    "warn": ("WARNING - obstacle ahead", "#e08e00"),
+    "stop": ("STOPPED - obstacle in stop range", "#c0392b"),
+}
+OBSTACLE_LOG = {
+    "clear": "Robot: path ahead clear.",
+    "warn": "Robot: obstacle detected ahead.",
+    "stop": "Robot: stopped - obstacle in stop range.",
+}
+
 
 class Phase2Frame(ttk.Frame):
-    def __init__(self, parent, state: TrailState, on_back, pose_feed=None, spawner=None, camera_feed=None):
+    def __init__(self, parent, state: TrailState, on_back, pose_feed=None, spawner=None, camera_feed=None,
+                 status_feed=None, snapshot_feed=None):
         super().__init__(parent)
         self.state = state
         self.on_back = on_back
         self.pose_feed = pose_feed
         self.spawner = spawner
         self.camera_feed = camera_feed
+        self.status_feed = status_feed
+        self.snapshot_feed = snapshot_feed
+        self._last_obstacle_level = None
+        self._last_mission_text = None
+        self._last_snapshot_id = 0
         self.mission_visible = False
         self.placing_obstacles = False
         self.running = False
@@ -103,6 +126,15 @@ class Phase2Frame(ttk.Frame):
         ttk.Label(right, textvariable=self.route_var, wraplength=230).pack(anchor="w")
         ttk.Label(right, textvariable=self.progress_var).pack(anchor="w", pady=(0, 10))
 
+        ttk.Label(right, text="Robot Status", font=("Arial", 11, "bold")).pack(anchor="w")
+        self.obstacle_banner = tk.Label(right, font=("Arial", 11, "bold"), fg="white", anchor="w",
+                                        padx=8, pady=4, wraplength=280, justify="left")
+        self.obstacle_banner.pack(anchor="w", fill="x")
+        self.mission_var = tk.StringVar(value="Mission: no updates from mission_manager yet")
+        ttk.Label(right, textvariable=self.mission_var, wraplength=280,
+                  justify="left").pack(anchor="w", pady=(2, 10))
+        self._show_obstacle_level(None, "Obstacle detector not connected")
+
         ttk.Label(right, text="Legend", font=("Arial", 11, "bold")).pack(anchor="w")
         ttk.Label(right, justify="left",
                   text="Black = unvisited route\nGreen = clear / passed\n"
@@ -110,6 +142,9 @@ class Phase2Frame(ttk.Frame):
                        "Dark circle = robot (live from simulation)\n"
                        "Orange circle = inspection playback").pack(anchor="w", pady=(0, 10))
 
+        if self.snapshot_feed is not None:
+            CameraPanel(right, self.snapshot_feed, title="Obstacle Snapshot",
+                        placeholder_text="NO SNAPSHOT YET").pack(anchor="w", pady=(0, 10))
         if self.camera_feed is not None:
             CameraPanel(right, self.camera_feed).pack(anchor="w", pady=(0, 10))
 
@@ -264,6 +299,7 @@ class Phase2Frame(ttk.Frame):
         while self.spawner is not None and not self.spawner.results.empty():
             _ok, message = self.spawner.results.get_nowait()
             self._log(message)
+        self._poll_robot_status()
         if self.winfo_ismapped():
             pose = self.pose_feed.get_pose() if self.pose_feed is not None else None
             if self.pose_feed is not None:
@@ -277,6 +313,30 @@ class Phase2Frame(ttk.Frame):
             self.after(POLL_MS, self._poll)
         except tk.TclError:
             pass
+
+    def _poll_robot_status(self):
+        """Show what the real robot's obstacle detector and mission manager are
+        reporting, and log every change (even while this tab is hidden)."""
+        if self.status_feed is not None:
+            level, mission_text = self.status_feed.get()
+            if level != self._last_obstacle_level:
+                if level in OBSTACLE_LOG:
+                    self._log(OBSTACLE_LOG[level])
+                self._last_obstacle_level = level
+            self._show_obstacle_level(level, self.status_feed.status()[1])
+            if mission_text is not None and mission_text != self._last_mission_text:
+                self.mission_var.set("Mission: " + mission_text)
+                self._log("Mission: " + mission_text)
+                self._last_mission_text = mission_text
+        if self.snapshot_feed is not None:
+            frame_id, _frame = self.snapshot_feed.get_frame()
+            if frame_id != self._last_snapshot_id:
+                self._log("Obstacle snapshot captured from the robot's camera.")
+                self._last_snapshot_id = frame_id
+
+    def _show_obstacle_level(self, level, detector_text):
+        text, color = OBSTACLE_BANNER.get(level, (detector_text, "#757575"))
+        self.obstacle_banner.configure(text=text, bg=color)
 
     def _log(self, text):
         self.log_box.insert(tk.END, text)

@@ -22,6 +22,7 @@ install(FILES
   camera_feed.py
   camera_panel.py
   ros_context.py
+  mission_status.py
   robot_pose.py
   sim_obstacles.py
   start_screen.py

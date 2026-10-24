@@ -14,6 +14,11 @@ sensor_msgs/Image into a PIL image (no cv_bridge / OpenCV needed), and keeps
 only the newest frame. The Tk GUI polls for it from its own thread via
 get_frame(), so no Tk calls are ever made from the ROS thread.
 
+Snapshot mode (snapshot=True) is for /husky1/obstacle_image instead: the
+obstacle detector publishes one latched frame each time an obstacle stop
+activates, so the feed subscribes reliable + transient-local (to also receive
+the last snapshot sent before the GUI started) and never reports it as stale.
+
 If ROS 2 isn't available (rclpy can't be imported) the GUI still runs; the
 camera panel just reports why there's no signal.
 
@@ -40,7 +45,7 @@ try:
     import rclpy
     from rclpy.node import Node
     from rclpy.executors import SingleThreadedExecutor
-    from rclpy.qos import qos_profile_sensor_data
+    from rclpy.qos import qos_profile_sensor_data, QoSProfile, DurabilityPolicy, ReliabilityPolicy
     from sensor_msgs.msg import Image as RosImage
     ROS_AVAILABLE = True
     _ROS_IMPORT_ERROR = ""
@@ -51,6 +56,7 @@ except Exception as exc:                  # normally ImportError; never let it c
 import ros_context
 
 DEFAULT_TOPIC = "/husky1/camera/image"
+SNAPSHOT_TOPIC = "/husky1/obstacle_image"
 STALE_AFTER_S = 3.0                       # camera runs ~3 Hz, so 3 s of silence = problem
 
 # encoding -> (channels, colour order)
@@ -93,13 +99,15 @@ def ros_image_to_pil(msg):
 class CameraFeed:
     """Subscribes to a ROS 2 camera topic and keeps the latest frame."""
 
-    def __init__(self, topic=DEFAULT_TOPIC):
+    def __init__(self, topic=DEFAULT_TOPIC, snapshot=False):
         self.topic = topic
+        self.snapshot = snapshot
         self._lock = threading.Lock()
         self._frame = None
         self._frame_id = 0
         self._frame_times = deque(maxlen=10)
         self._last_frame_time = None
+        self._last_wall_time = None
         self._last_error = ""
         self._startup_error = ""
 
@@ -126,11 +134,18 @@ class CameraFeed:
         try:
             ros_context.acquire()
             self._holds_context = True
-            self._node = Node(f"trailblazer_gui_camera_{os.getpid()}")
-            # Sensor-data QoS (best effort) can connect to both best-effort and
-            # reliable publishers, so it works however the bridge is configured.
-            self._node.create_subscription(RosImage, self.topic, self._on_image,
-                                           qos_profile_sensor_data)
+            kind = "snapshot" if self.snapshot else "camera"
+            self._node = Node(f"trailblazer_gui_{kind}_{os.getpid()}")
+            if self.snapshot:
+                # Match the detector's latched publisher so a snapshot taken
+                # before the GUI started is still delivered.
+                qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                                 durability=DurabilityPolicy.TRANSIENT_LOCAL)
+            else:
+                # Sensor-data QoS (best effort) can connect to both best-effort and
+                # reliable publishers, so it works however the bridge is configured.
+                qos = qos_profile_sensor_data
+            self._node.create_subscription(RosImage, self.topic, self._on_image, qos)
             self._executor = SingleThreadedExecutor()
             self._executor.add_node(self._node)
         except Exception as exc:
@@ -183,6 +198,7 @@ class CameraFeed:
             self._frame_id += 1
             self._frame_times.append(now)
             self._last_frame_time = now
+            self._last_wall_time = time.time()
         self._last_error = ""
 
     # ---------------- GUI-facing API ----------------
@@ -199,12 +215,17 @@ class CameraFeed:
             return "unavailable", self._startup_error
         with self._lock:
             last = self._last_frame_time
+            wall = self._last_wall_time
             times = list(self._frame_times)
             frame = self._frame
         if last is None:
             if self._last_error:
                 return "error", f"Camera frames can't be shown: {self._last_error}"
+            if self.snapshot:
+                return "waiting", f"No obstacle snapshot yet (listening on {self.topic})"
             return "waiting", f"Waiting for frames on {self.topic} ... is the simulation running?"
+        if self.snapshot:
+            return "live", f"Captured {time.strftime('%H:%M:%S', time.localtime(wall))}  {frame.width}x{frame.height}"
         age = time.monotonic() - last
         if age > STALE_AFTER_S:
             return "stale", f"No new frames for {age:.0f} s on {self.topic}"
