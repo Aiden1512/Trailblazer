@@ -41,10 +41,30 @@ GroundFilter::GroundFilter() : Node("ground_filter")
   sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
       "/husky1/scan/points", 10,
       [this](sensor_msgs::msg::PointCloud2::SharedPtr msg) { callback(msg); });
+  camera_sub_ = create_subscription<sensor_msgs::msg::Image>(
+      "/husky1/camera/image", rclcpp::SensorDataQoS(),
+      [this](sensor_msgs::msg::Image::ConstSharedPtr msg) {
+        if (!awaiting_obstacle_image_)
+        {
+          return;
+        }
+
+        obstacle_image_pub_->publish(*msg);
+        awaiting_obstacle_image_ = false;
+        RCLCPP_INFO(
+            get_logger(), "Published obstacle snapshot (%ux%u) on /husky1/obstacle_image",
+            msg->width, msg->height);
+      });
   pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/husky1/scan/points_filtered", 10);
+  obstacle_image_pub_ = create_publisher<sensor_msgs::msg::Image>(
+      "/husky1/obstacle_image", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
   obstacle_pub_ = create_publisher<std_msgs::msg::Bool>("/husky1/obstacle_detected", 10);
   stop_pub_ = create_publisher<std_msgs::msg::Bool>("/husky1/obstacle_stop", 10);
   scan_pub_ = create_publisher<sensor_msgs::msg::LaserScan>("/husky1/obstacle_scan", 10);
+  RCLCPP_INFO(
+      get_logger(),
+      "Obstacle snapshots: waiting for /husky1/camera/image when stop activates; publishing to "
+      "/husky1/obstacle_image");
 }
 
 void GroundFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
@@ -92,6 +112,19 @@ void GroundFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
   obstacle_pub_->publish(m);
   m.data = stop;
   stop_pub_->publish(m);
+
+  if (stop && !previous_stop_)
+  {
+    awaiting_obstacle_image_ = true;
+    RCLCPP_INFO(get_logger(), "Obstacle stop active; capturing the next camera frame");
+  }
+  else if (!stop && previous_stop_ && awaiting_obstacle_image_)
+  {
+    awaiting_obstacle_image_ = false;
+    RCLCPP_WARN(
+        get_logger(),
+        "Obstacle stop cleared before a camera frame arrived; obstacle snapshot cancelled");
+  }
 
   sensor_msgs::msg::LaserScan scan;
   scan.header = msg->header;

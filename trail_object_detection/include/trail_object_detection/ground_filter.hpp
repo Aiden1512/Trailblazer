@@ -2,6 +2,7 @@
 #define TRAIL_OBJECT_DETECTION__GROUND_FILTER_HPP_
 
 #include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "std_msgs/msg/bool.hpp"
@@ -14,6 +15,7 @@
 //        /husky1/obstacle_detected      warn  (Bool, every frame)
 //        /husky1/obstacle_stop          stop  (Bool, every frame) -> mission_manager
 //        /husky1/obstacle_scan          LaserScan of low+tall obstacles (optional for Nav2)
+//        /husky1/obstacle_image         camera snapshot (Image, once per stop activation)
 class GroundFilter : public rclcpp::Node
 {
 public:
@@ -33,10 +35,13 @@ private:
   bool previous_stop_ = false;
 
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_;
+  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr camera_sub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr obstacle_image_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr obstacle_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr stop_pub_;
   rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr scan_pub_;
+  bool awaiting_obstacle_image_ = false;
 };
 
 #endif
