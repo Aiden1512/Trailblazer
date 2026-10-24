@@ -25,6 +25,7 @@ namespace trail_decision_making
             "nav_action_name", "navigate_to_pose");
         max_goal_retries_ = declare_parameter<int>("max_goal_retries", 3);
         retry_delay_sec_ = declare_parameter<double>("retry_delay_sec", 2.0);
+        obstacle_wait_sec_ = declare_parameter<double>("obstacle_wait_sec", 4.0);
 
         // Initialize TF buffer and listener, and the navigation action client
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
@@ -219,7 +220,7 @@ namespace trail_decision_making
     // If we have reached the last waypoint, we call onEdgeFinished() to handle the end of the edge traversal.
     void MissionManager::sendNextWaypoint()
     {
-        if (obstacle_stop_active_)
+        if (obstacle_pause_active_)
         {
             RCLCPP_WARN_THROTTLE(
                 get_logger(), *get_clock(), 2000,
@@ -305,9 +306,11 @@ namespace trail_decision_making
         // Check if the navigation was successful
         if (result.code != rclcpp_action::ResultCode::SUCCEEDED)
         {
-            if (obstacle_stop_active_)
+            // We only cancel goals ourselves (obstacle pause), and whoever cancelled
+            // is responsible for resending, so a cancelled result is never a failure.
+            if (result.code == rclcpp_action::ResultCode::CANCELED)
             {
-                RCLCPP_WARN(get_logger(), "Nav2 goal cancelled while obstacle stop is active");
+                RCLCPP_INFO(get_logger(), "Nav2 goal cancelled");
                 return;
             }
             // An abort is often transient (e.g. stale costmap cells around the robot
@@ -325,7 +328,7 @@ namespace trail_decision_making
                     std::chrono::duration<double>(retry_delay_sec_), [this]()
                     {
                         retry_timer_->cancel();
-                        if (mission_active_ && !obstacle_stop_active_)
+                        if (mission_active_ && !obstacle_pause_active_)
                         {
                             sendNextWaypoint();
                         } });
@@ -386,6 +389,10 @@ namespace trail_decision_making
         chooseNextEdgeAndSendGoal();                                              // plan to the next uninspected edge and send the first waypoint of that edge
     }
 
+    // When an obstacle enters the stop range we cancel the Nav2 goal so the robot stops, wait
+    // obstacle_wait_sec_ for the obstacle to move away and for the costmaps to mark it, then
+    // resend the current waypoint so Nav2 plans a path around it. While Nav2 is going around,
+    // the stop topic is ignored (the robot will pass close to the obstacle) until it clears.
     void MissionManager::obstacleStopCallback(const std_msgs::msg::Bool::SharedPtr msg)
     {
         if (msg->data == obstacle_stop_active_) // if the obstacle stop state has not changed, we don't need to do anything
@@ -396,19 +403,53 @@ namespace trail_decision_making
         obstacle_stop_active_ = msg->data;
         if (obstacle_stop_active_)
         {
-            RCLCPP_WARN(get_logger(), "Obstacle is inside the stop range; cancelling Nav2 goal");
+            if (obstacle_avoidance_active_)
+            {
+                return; // already going around an obstacle; let Nav2 handle it
+            }
+            RCLCPP_WARN(get_logger(),
+                        "Obstacle is inside the stop range; stopping for %.1f s before going around",
+                        obstacle_wait_sec_);
+            obstacle_pause_active_ = true;
+            if (retry_timer_)
+            {
+                retry_timer_->cancel();
+            }
             if (current_goal_handle_)
             {
                 nav_client_->async_cancel_goal(current_goal_handle_);
                 current_goal_handle_.reset();
             }
+            obstacle_wait_timer_ = create_wall_timer(
+                std::chrono::duration<double>(obstacle_wait_sec_), [this]()
+                {
+                    obstacle_wait_timer_->cancel();
+                    obstacle_pause_active_ = false;
+                    if (!mission_active_)
+                    {
+                        return;
+                    }
+                    RCLCPP_INFO(get_logger(), "Obstacle still present; asking Nav2 to plan around it");
+                    obstacle_avoidance_active_ = true;
+                    goal_retry_count_ = 0;
+                    sendNextWaypoint(); });
         }
         else
         {
-            RCLCPP_INFO(get_logger(), "Obstacle stop cleared; navigation may resume");
-            if (mission_active_)
+            obstacle_avoidance_active_ = false;
+            if (obstacle_pause_active_) // obstacle moved away during the wait; resume straight away
             {
-                sendNextWaypoint();
+                obstacle_wait_timer_->cancel();
+                obstacle_pause_active_ = false;
+                RCLCPP_INFO(get_logger(), "Obstacle stop cleared; resuming navigation");
+                if (mission_active_)
+                {
+                    sendNextWaypoint();
+                }
+            }
+            else
+            {
+                RCLCPP_INFO(get_logger(), "Obstacle stop cleared");
             }
         }
     }

@@ -47,6 +47,7 @@ namespace trail_decision_making
         RoutePlanner planner_{graph_};
         rclcpp::TimerBase::SharedPtr start_timer_;
         rclcpp::TimerBase::SharedPtr retry_timer_;
+        rclcpp::TimerBase::SharedPtr obstacle_wait_timer_;
 
         // Current mission state
         int current_node_id_ = -1;
@@ -55,7 +56,10 @@ namespace trail_decision_making
         bool return_pass_pending_ = false;
         bool return_pass_active_ = false;
         bool mission_active_ = false;
-        bool obstacle_stop_active_ = false;
+        bool obstacle_stop_active_ = false;      // latest value of the obstacle_stop topic
+        bool obstacle_pause_active_ = false;     // stopped, waiting before trying to go around
+        bool obstacle_avoidance_active_ = false; // Nav2 is replanning around the obstacle; stop topic ignored
+        double obstacle_wait_sec_ = 4.0;
         bool transit_to_edge_start_ = false;
         std::vector<Waypoint> current_waypoints_;
         size_t current_waypoint_index_ = 0;
