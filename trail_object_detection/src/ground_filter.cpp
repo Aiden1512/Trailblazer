@@ -1,135 +1,127 @@
 #include "trail_object_detection/ground_filter.hpp"
 #include "sensor_msgs/point_cloud2_iterator.hpp"
-#include "std_msgs/msg/bool.hpp"
 
-#include <cmath>
+#include <cstddef>
 #include <limits>
+
+using trail_object_detection::PointClass;
+using trail_object_detection::ZoneCounts;
 
 GroundFilter::GroundFilter() : Node("ground_filter")
 {
-  RCLCPP_INFO(this->get_logger(), "[DETECTION] ground_filter: starting");
+  auto &p = params_;
+  p.sensor_height = declare_parameter("sensor_height", p.sensor_height);
+  p.ground_margin = declare_parameter("ground_margin", p.ground_margin);
+  p.slope_tolerance = declare_parameter("slope_tolerance", p.slope_tolerance);
+  p.body_front = declare_parameter("body_front", p.body_front);
+  p.body_rear = declare_parameter("body_rear", p.body_rear);
+  p.body_half_width = declare_parameter("body_half_width", p.body_half_width);
+  p.overhead_z = declare_parameter("overhead_z", p.overhead_z);
+  p.sensor_to_front = declare_parameter("sensor_to_front", p.sensor_to_front);
+  p.corridor_half_width = declare_parameter("corridor_half_width", p.corridor_half_width);
+  p.stop_distance = declare_parameter("stop_distance", p.stop_distance);
+  p.warn_distance = declare_parameter("warn_distance", p.warn_distance);
+  p.max_range = declare_parameter("max_range", p.max_range);
+  cloud_max_z_ = declare_parameter("cloud_max_z", 1.5);
 
-  min_z_ = declare_parameter("min_z", -0.72);
-  max_z_ = declare_parameter("max_z", 1.50);
-  min_detection_range_ = declare_parameter("min_detection_range", 0.35);
-  max_detection_range_ = declare_parameter("max_detection_range", 4.0);
-  stop_range_ = declare_parameter("stop_range", 0.45);
-  detection_width_ = declare_parameter("detection_width", 1.0);
-  min_detection_points_ = declare_parameter("min_detection_points", 3);
-  min_stop_points_ = declare_parameter("min_stop_points", 1);
+  min_warn_points_ = declare_parameter("min_warn_points", 3);
+  min_stop_points_ = declare_parameter("min_stop_points", 3);
+  const int on_frames = declare_parameter("on_frames", 2);
+  const int off_frames = declare_parameter("off_frames", 3);
+  warn_debounce_ = trail_object_detection::Debouncer(on_frames, off_frames);
+  stop_debounce_ = trail_object_detection::Debouncer(on_frames, off_frames);
 
   RCLCPP_INFO(
-      this->get_logger(),
-      "Ground filter started: z=[%.2f, %.2f], warning range=[%.2f, %.2f] m, stop range=%.2f m, width=%.2f m",
-      min_z_, max_z_, min_detection_range_, max_detection_range_, stop_range_, detection_width_);
+      get_logger(),
+      "Perception: obstacle = %.2f m above ground (+%.2f/m) up to z=%.2f (robot top); "
+      "corridor +-%.2f m, stop %.2f m / warn %.2f m ahead of bumper; need %d/%d pts, debounce %d on/%d off",
+      p.ground_margin, p.slope_tolerance, p.overhead_z, p.corridor_half_width,
+      p.stop_distance, p.warn_distance, min_stop_points_, min_warn_points_, on_frames, off_frames);
 
-  // Subscribe to the raw LiDAR point cloud coming from the sim/bridge
-  sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+  sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
       "/husky1/scan/points", 10,
-      [this](sensor_msgs::msg::PointCloud2::SharedPtr msg)
-      { callback(msg); });
-
-  // Publish the cleaned-up (ground-removed) point cloud
-  pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-      "/husky1/scan/points_filtered", 10);
-  obstacle_pub_ = this->create_publisher<std_msgs::msg::Bool>(
-      "/husky1/obstacle_detected", 10);
-  stop_pub_ = this->create_publisher<std_msgs::msg::Bool>(
-      "/husky1/obstacle_stop", 10);
-
-  previous_obstacle_state_ = false;
-  has_previous_obstacle_state_ = false;
-  previous_stop_state_ = false;
-  has_previous_stop_state_ = false;
-
-  RCLCPP_INFO(this->get_logger(), "Subscribed to /husky1/scan/points");
-  RCLCPP_INFO(this->get_logger(), "Publishing filtered cloud on /husky1/scan/points_filtered");
-  RCLCPP_INFO(this->get_logger(), "Publishing obstacle state on /husky1/obstacle_detected");
-  RCLCPP_INFO(this->get_logger(), "Publishing stop state on /husky1/obstacle_stop");
-  RCLCPP_INFO(this->get_logger(), "[DETECTION] ground_filter: started");
+      [this](sensor_msgs::msg::PointCloud2::SharedPtr msg) { callback(msg); });
+  pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/husky1/scan/points_filtered", 10);
+  obstacle_pub_ = create_publisher<std_msgs::msg::Bool>("/husky1/obstacle_detected", 10);
+  stop_pub_ = create_publisher<std_msgs::msg::Bool>("/husky1/obstacle_stop", 10);
+  scan_pub_ = create_publisher<sensor_msgs::msg::LaserScan>("/husky1/obstacle_scan", 10);
 }
 
 void GroundFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
-  // Copy the incoming message so we keep its structure/header intact
   sensor_msgs::msg::PointCloud2 filtered = *msg;
-  std::size_t total_points = 0;
-  std::size_t retained_points = 0;
-  std::size_t detection_points = 0;
-  std::size_t stop_points = 0;
+  filtered.is_dense = false;
 
-  // Iterate over every point's z value (height relative to the sensor)
-  sensor_msgs::PointCloud2Iterator<float> iter_z(filtered, "z");
-  sensor_msgs::PointCloud2Iterator<float> iter_x(filtered, "x");
-  sensor_msgs::PointCloud2Iterator<float> iter_y(filtered, "y");
+  sensor_msgs::PointCloud2Iterator<float> ix(filtered, "x");
+  sensor_msgs::PointCloud2Iterator<float> iy(filtered, "y");
+  sensor_msgs::PointCloud2Iterator<float> iz(filtered, "z");
 
-  for (; iter_z != iter_z.end(); ++iter_z, ++iter_x, ++iter_y)
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  ZoneCounts counts;
+  std::size_t kept = 0;
+  obstacle_scan_.reset();
+
+  for (; ix != ix.end(); ++ix, ++iy, ++iz)
   {
-    ++total_points;
-    const float x = *iter_x;
-    const float y = *iter_y;
-    const float z = *iter_z;
+    const float x = *ix, y = *iy, z = *iz;
+    const PointClass c = trail_object_detection::classify(x, y, z, params_);
 
-    // Keep only points in the useful obstacle-height band. NaN points remain
-    // invalid and are ignored by RViz and downstream point-cloud consumers.
-    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) ||
-        z < min_z_ || z > max_z_)
+    if (c == PointClass::Obstacle)
     {
-      *iter_z = std::numeric_limits<float>::quiet_NaN();
-      continue;
+      trail_object_detection::countPoint(x, y, params_, counts);
+      obstacle_scan_.add(x, y);
+      ++kept;
     }
-
-    ++retained_points;
-    const double range = std::hypot(static_cast<double>(x), static_cast<double>(y));
-    if (x > 0.0 && range >= min_detection_range_ &&
-        range <= max_detection_range_ && std::abs(y) <= detection_width_ / 2.0)
+    else if (c == PointClass::Overhead && z <= cloud_max_z_)
     {
-      ++detection_points;
+      ++kept; // visible in RViz, never counted
     }
-    if (x > 0.0 && range <= stop_range_ && std::abs(y) <= detection_width_ / 2.0)
+    else
     {
-      ++stop_points;
+      *ix = nan;
+      *iy = nan;
+      *iz = nan;
     }
   }
 
-  std_msgs::msg::Bool obstacle;
-  obstacle.data = detection_points >= static_cast<std::size_t>(min_detection_points_);
-  obstacle_pub_->publish(obstacle);
+  const bool warn = warn_debounce_.update(counts.warn >= static_cast<std::size_t>(min_warn_points_));
+  const bool stop = stop_debounce_.update(counts.stop >= static_cast<std::size_t>(min_stop_points_));
 
-  std_msgs::msg::Bool stop;
-  stop.data = stop_points >= static_cast<std::size_t>(min_stop_points_);
-  stop_pub_->publish(stop);
+  std_msgs::msg::Bool m;
+  m.data = warn;
+  obstacle_pub_->publish(m);
+  m.data = stop;
+  stop_pub_->publish(m);
 
-  if (!has_previous_obstacle_state_ || obstacle.data != previous_obstacle_state_)
+  sensor_msgs::msg::LaserScan scan;
+  scan.header = msg->header;
+  scan.angle_min = -static_cast<float>(trail_object_detection::kPi);
+  scan.angle_max = static_cast<float>(trail_object_detection::kPi);
+  scan.angle_increment = static_cast<float>(2.0 * trail_object_detection::kPi / 360.0);
+  scan.range_min = 0.1f;
+  scan.range_max = static_cast<float>(params_.max_range);
+  for (float r : obstacle_scan_.ranges())
   {
-    RCLCPP_INFO(
-        this->get_logger(), "Obstacle state changed: %s (corridor points=%zu)",
-        obstacle.data ? "DETECTED" : "CLEAR", detection_points);
-    previous_obstacle_state_ = obstacle.data;
-    has_previous_obstacle_state_ = true;
+    scan.ranges.push_back(r > scan.range_max ? std::numeric_limits<float>::infinity() : r);
   }
+  scan_pub_->publish(scan);
 
-  if (!has_previous_stop_state_ || stop.data != previous_stop_state_)
+  if (warn != previous_warn_)
   {
-    RCLCPP_WARN(
-        this->get_logger(), "Stop state changed: %s (near points=%zu)",
-        stop.data ? "STOP" : "CLEAR", stop_points);
-    previous_stop_state_ = stop.data;
-    has_previous_stop_state_ = true;
+    RCLCPP_INFO(get_logger(), "Obstacle warning %s (pts=%zu)", warn ? "DETECTED" : "CLEAR", counts.warn);
+    previous_warn_ = warn;
   }
+  if (stop != previous_stop_)
+  {
+    RCLCPP_WARN(get_logger(), "Obstacle stop %s (pts=%zu)", stop ? "ACTIVE" : "CLEAR", counts.stop);
+    previous_stop_ = stop;
+  }
+  RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
+                        "kept=%zu warn_pts=%zu stop_pts=%zu", kept, counts.warn, counts.stop);
 
-  RCLCPP_DEBUG_THROTTLE(
-      this->get_logger(), *this->get_clock(), 1000,
-      "Cloud: total=%zu retained=%zu warning_points=%zu near_stop_points=%zu warning_threshold=%d stop_threshold=%d warning=%s stop=%s",
-      total_points, retained_points, detection_points, stop_points,
-      min_detection_points_, min_stop_points_, obstacle.data ? "true" : "false",
-      stop.data ? "true" : "false");
-
-  // Publish the filtered cloud for RViz, Nav2, and other consumers.
   pub_->publish(filtered);
 }
 
-// Standard ROS 2 node entry point
 int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);
