@@ -15,6 +15,10 @@ playback on the map (it does not drive the robot).
 Placing an obstacle on the map also places a real obstacle in the simulation
 (see sim_obstacles.py); "Clear Obstacles" removes them again.
 
+"Start Autonomous Inspection" also starts the REAL mission: mission_manager
+holds on launch until the GUI calls /husky1/start_mission (see
+mission_status.py), and its replies and progress appear in the log.
+
 The Robot Status section shows the real robot's state, independent of the
 playback: the obstacle detector's warn/stop flags, the mission manager's
 latest status line, and the camera snapshot taken when an obstacle stop
@@ -212,6 +216,11 @@ class Phase2Frame(ttk.Frame):
 
     # ---------------- inspection run ----------------
     def _start_inspection(self):
+        # Start the real robot: mission_manager holds on launch until asked (it inspects its
+        # own recorded trail graph, so this doesn't depend on the map shown here).
+        if self.status_feed is not None:
+            self._log("Asking mission_manager to start the real inspection...")
+            self.status_feed.request_start()   # the reply is logged by _poll_robot_status
         if not self.state.edges:
             self._log("No trail network to inspect - map a route in Phase 1 first.")
             return
@@ -318,6 +327,9 @@ class Phase2Frame(ttk.Frame):
         """Show what the real robot's obstacle detector and mission manager are
         reporting, and log every change (even while this tab is hidden)."""
         if self.status_feed is not None:
+            while not self.status_feed.start_results.empty():
+                ok, message = self.status_feed.start_results.get_nowait()
+                self._log(("Robot: " if ok else "Robot not started: ") + message)
             level, mission_text = self.status_feed.get()
             if level != self._last_obstacle_level:
                 if level in OBSTACLE_LOG:

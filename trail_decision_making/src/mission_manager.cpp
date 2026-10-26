@@ -25,6 +25,7 @@ namespace trail_decision_making
             "nav_action_name", "navigate_to_pose");
         max_goal_retries_ = declare_parameter<int>("max_goal_retries", 3);
         retry_delay_sec_ = declare_parameter<double>("retry_delay_sec", 2.0);
+        auto_start_ = declare_parameter<bool>("auto_start", false);
 
         // Initialize TF buffer and listener, and the navigation action client
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
@@ -40,10 +41,64 @@ namespace trail_decision_making
         // Latched so the GUI gets the current status even if it starts after us
         status_pub_ = create_publisher<std_msgs::msg::String>(
             "/husky1/mission_status", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
-        publishStatus("Waiting to start");
+        // The mission is held until the GUI's start button calls this service (unless auto_start is set)
+        start_srv_ = create_service<std_srvs::srv::Trigger>(
+            "/husky1/start_mission",
+            std::bind(&MissionManager::onStartRequest, this, _1, _2));
 
+        if (auto_start_)
+        {
+            publishStatus("Waiting to start");
+            start_timer_ = create_wall_timer(1s, [this]()
+                                             { startMission(); });
+        }
+        else
+        {
+            RCLCPP_INFO(get_logger(), "Holding: call /husky1/start_mission to start the inspection");
+            publishStatus("Ready - waiting for the start command");
+        }
+    }
+
+    // Called when the operator presses "Start Autonomous Inspection" in the GUI. Checks the
+    // trail graph can be loaded, then hands over to the start timer, which retries startMission()
+    // every second until localisation is available. Progress after this goes out on mission_status.
+    void MissionManager::onStartRequest(
+        const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+        std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+    {
+        if (mission_active_)
+        {
+            response->success = false;
+            response->message = "Mission is already running";
+            return;
+        }
+        if (start_timer_ && !start_timer_->is_canceled())
+        {
+            response->success = false;
+            response->message = "Mission is already starting";
+            return;
+        }
+        loadGraph(); // check the graph now so a bad waypoints file is reported straight back to the GUI
+        if (graph_.edges().empty())
+        {
+            response->success = false;
+            response->message = "Cannot start: no trail graph loaded from '" + waypoints_file_ + "'";
+            publishStatus("Cannot start: trail graph has no edges");
+            return;
+        }
+
+        // Clear anything left over from a previous (finished or stopped) run
+        route_.clear();
+        current_goal_handle_.reset();
+        return_pass_pending_ = false;
+        return_pass_active_ = false;
+
+        RCLCPP_INFO(get_logger(), "Start command received");
+        publishStatus("Start command received");
         start_timer_ = create_wall_timer(1s, [this]()
                                          { startMission(); });
+        response->success = true;
+        response->message = "Mission starting (" + std::to_string(graph_.edges().size()) + " trail edges)";
     }
 
     // Load the trail graph from the YAML file specified in the waypoints_file_ parameter.
