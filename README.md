@@ -20,10 +20,19 @@ source install/setup.bash
 
 1. Start the Husky simulation, SLAM, Nav2, and RViz:
 
+   There may be an issue on the first run of opening the simulation, to fix run these two: 
+
+    ```bash
+    export MESA_GL_VERSION_OVERRIDE=3.3
+    export LIBGL_ALWAYS_SOFTWARE=1
+    ```
+
+   To start the simulation with no obstacles:
+
    ```bash
    ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py slam:=true nav2:=true rviz:=true world:=trail_world
    ```
-    or for obstacle world: 
+   or for obstacle world: 
 
     ```bash
    ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py slam:=true nav2:=true rviz:=true world:=obstacle_world
@@ -45,6 +54,12 @@ source install/setup.bash
 
    ```bash
    ros2 run trailblazer_gui main.py
+   ```
+
+5. To override the GUI button and automatically start the mission:
+
+   ```bash
+   ros2 service call /husky1/start_mission std_srvs/srv/Trigger
    ```
 
 In the GUI, map a trail in **Phase 1** or continue with a saved map, then go to
