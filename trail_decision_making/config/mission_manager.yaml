@@ -5,3 +5,4 @@
     global_frame: "husky1_map"
     robot_frame: "husky1_base_link"
     nav_action_name: "navigate_to_pose"
+    auto_start: false   # true = start without waiting for the GUI's start button (/husky1/start_mission)

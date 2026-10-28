@@ -8,6 +8,8 @@
 
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "std_msgs/msg/bool.hpp"
+#include "std_msgs/msg/string.hpp"
+#include "std_srvs/srv/trigger.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
@@ -31,6 +33,8 @@ namespace trail_decision_making
 
         rclcpp_action::Client<NavigateToPose>::SharedPtr nav_client_;
         rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr obstacle_stop_sub_;
+        rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_; // one-line progress for the GUI
+        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv_;   // the GUI's "Start Autonomous Inspection" button
         GoalHandleNavigateToPose::SharedPtr current_goal_handle_;
 
         // Mission control methods
@@ -42,6 +46,10 @@ namespace trail_decision_making
         void onNavigationResult(const GoalHandleNavigateToPose::WrappedResult &result);
         void onEdgeFinished();
         void obstacleStopCallback(const std_msgs::msg::Bool::SharedPtr msg);
+        void publishStatus(const std::string &text);
+        void onStartRequest(
+            const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+            std::shared_ptr<std_srvs::srv::Trigger::Response> response);
 
         TrailGraph graph_;
         RoutePlanner planner_{graph_};
@@ -62,6 +70,7 @@ namespace trail_decision_making
         int goal_retry_count_ = 0; // consecutive aborts of the current waypoint
         int max_goal_retries_ = 3;
         double retry_delay_sec_ = 2.0;
+        bool auto_start_ = false; // start as soon as TF is up instead of waiting for /husky1/start_mission
         // a deque is used here because we will be popping from the front as we traverse edges
         std::deque<int> route_; // sequence of edge ids to traverse, in order, to reach the next uninspected edge
 

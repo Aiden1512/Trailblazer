@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "units": "cm",
+  "frame": "origin at map centre, +x right, +y up",
+  "nodes": [
+    {
+      "x": 716.2,
+      "y": 327.9,
+      "kind": "junction"
+    },
+    {
+      "x": 663.8,
+      "y": 305.6,
+      "kind": "waypoint"
+    },
+    {
+      "x": 608.8,
+      "y": 296.9,
+      "kind": "junction"
+    },
+    {
+      "x": 568.6,
+      "y": 336.6,
+      "kind": "waypoint"
+    },
+    {
+      "x": 534.4,
+      "y": 382.8,
+      "kind": "junction"
+    },
+    {
+      "x": 543.6,
+      "y": 370.5,
+      "kind": "waypoint"
+    },
+    {
+      "x": 580.0,
+      "y": 325.4,
+      "kind": "junction"
+    },
+    {
+      "x": 637.1,
+      "y": 318.2,
+      "kind": "waypoint"
+    },
+    {
+      "x": 692.7,
+      "y": 320.9,
+      "kind": "waypoint"
+    }
+  ]
+}
