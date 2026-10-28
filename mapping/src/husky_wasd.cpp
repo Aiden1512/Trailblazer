@@ -28,7 +28,7 @@ public:
         std::cout << "Husky WASD Controller\n"
                   << "W = Forward | S = Backward\n"
                   << "A = Left    | D = Right\n"
-                  << "X = Stop    | Q = Quit\n";
+                  << "SPACE = Stop    | Q = Quit\n";
 
         char key;
         bool running = true;
@@ -61,8 +61,7 @@ public:
                     msg.angular.z = -0.8;
                     break;
 
-                case 'x':
-                case 'X':
+                case ' ':
                     // All velocities remain zero
                     break;
 
