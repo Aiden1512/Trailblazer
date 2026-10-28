@@ -1,0 +1,396 @@
+
+#include <rclcpp/rclcpp.hpp>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <geometry_msgs/msg/point.hpp>
+#include <nav_msgs/msg/occupancy_grid.hpp>
+#include <cmath>
+#include <fstream>
+#include <memory>
+#include <string>
+#include <vector>
+#include <visualization_msgs/msg/marker.hpp>
+#include <std_msgs/msg/color_rgba.hpp>
+
+struct JunctionNode
+{
+    double x;
+    double y;
+    double yaw;
+};
+
+class JunctionRecorder : public rclcpp::Node
+{
+public:
+    JunctionRecorder()
+        : Node("junction_recorder")
+    {
+    
+        
+        this->declare_parameter<double>("detection_radius", 2.0);
+        this->declare_parameter<std::string>("save_file", "junction_nodes.yaml");
+
+        detection_radius_ = this->get_parameter("detection_radius").as_double();
+        save_file_ = this->get_parameter("save_file").as_string();
+
+        pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("/husky1/pose", 10, std::bind(&JunctionRecorder::poseCallback, this, std::placeholders::_1));
+        map_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>("/husky1/map", 10, std::bind(&JunctionRecorder::mapCallback, this, std::placeholders::_1));
+        ray_marker_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/husky1/junction_rays", 10);
+        RCLCPP_INFO(this->get_logger(), "Junction recorder started.");
+    }
+
+    ~JunctionRecorder()
+    {
+        saveNodes();
+    }
+
+
+private:
+
+    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pose_sub_;
+    rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr ray_marker_pub_;
+    nav_msgs::msg::OccupancyGrid::SharedPtr latest_map_;
+    std::vector<JunctionNode> nodes_;
+
+    double detection_radius_; //How far from the robot to check for open paths
+    double angle_resolution_deg_ = 5.0; //Angle frequency of checks for open paths 
+    double ray_step_ = 0.10; //Distance between samples along each ray
+    double minimum_opening_deg_ = 25.0; //Minimum size of an opening
+    double minimum_node_distance_ = 1.5; //Minimum distance between nodes
+    int confirmation_required_ = 3; //Number of consecutive detections required to be considered a node
+    int occupied_threshold_ = 50; //How confident before consider occupancy map occupied
+    int consecutive_detections_ = 0;
+    std::string save_file_;
+
+   
+    void mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
+    {
+        latest_map_ = msg;
+    }
+
+    void poseCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg)
+    {
+        if (!latest_map_){return;}
+
+        double x = msg->pose.pose.position.x;
+        double y = msg->pose.pose.position.y;
+        double yaw = getYaw(msg->pose.pose.orientation);
+        int openings = detectOpenings(x, y);
+
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "Open directions detected: %d", openings);
+
+        // We only care about junctions.
+        if (openings >= 3)
+        {
+            consecutive_detections_++;
+            RCLCPP_INFO(this->get_logger(), "Possible junction: %d openings (%d/%d)", openings, consecutive_detections_, confirmation_required_);
+        }
+        else
+        {
+            consecutive_detections_ = 0;
+        }
+
+        // Junction must be detected repeatedly.
+        if (consecutive_detections_ >= confirmation_required_)
+        {
+            if (!nodeNearby(x, y))
+            {
+                saveJunctionNode(x,y,yaw);
+            }
+            consecutive_detections_ = 0;
+        }
+    }
+
+   int detectOpenings(double robot_x, double robot_y)
+{
+    int number_of_rays =
+        static_cast<int>(360.0 / angle_resolution_deg_);
+
+    std::vector<bool> ray_is_open(number_of_rays, false);
+
+    // Marker containing all of our rays
+    visualization_msgs::msg::Marker marker;
+
+    marker.header.frame_id = "husky1_map";
+    marker.header.stamp = this->now();
+
+    marker.ns = "junction_detection";
+    marker.id = 0;
+
+    marker.type = visualization_msgs::msg::Marker::LINE_LIST;
+    marker.action = visualization_msgs::msg::Marker::ADD;
+    marker.scale.x = 0.02;
+
+  
+    for (int i = 0; i < number_of_rays; i++)
+    {
+        double angle_deg = i * angle_resolution_deg_;
+
+        double angle_rad = angle_deg * M_PI / 180.0;
+
+        bool open = isDirectionOpen(robot_x, robot_y, angle_rad);
+        ray_is_open.at(i) = open;
+
+        // Start of ray
+        geometry_msgs::msg::Point start;
+
+        start.x = robot_x;
+        start.y = robot_y;
+        start.z = 0.1;
+
+        // End of ray
+        geometry_msgs::msg::Point end;
+
+        end.x = robot_x + detection_radius_ * std::cos(angle_rad);
+        end.y = robot_y + detection_radius_ * std::sin(angle_rad);
+        end.z = 0.1;
+
+        std_msgs::msg::ColorRGBA colour;
+
+        if (open)
+        {
+            // Green, algorithm thinks this direction is open
+            colour.r = 0.0;
+            colour.g = 1.0;
+            colour.b = 0.0;
+            colour.a = 1.0;
+        }
+        else
+        {
+            // Red, algorithm thinks this direction is blocked
+            colour.r = 1.0;
+            colour.g = 0.0;
+            colour.b = 0.0;
+            colour.a = 1.0;
+        }
+
+        marker.colors.push_back(colour);
+        marker.colors.push_back(colour);
+
+        marker.points.push_back(start);
+        marker.points.push_back(end);
+    }
+
+    ray_marker_pub_->publish(marker);
+
+    return countOpenSectors(ray_is_open);
+}
+
+bool isDirectionOpen(double robot_x, double robot_y, double angle)
+{
+    for (double distance = ray_step_; distance <= detection_radius_; distance += ray_step_)
+    {
+        double world_x = robot_x + distance * std::cos(angle);
+        double world_y = robot_y + distance * std::sin(angle);
+
+        int grid_x;
+        int grid_y;
+
+        if (!worldToGrid(world_x, world_y, grid_x, grid_y))
+        {
+            return false;
+        }
+
+        int index = grid_y * latest_map_->info.width + grid_x;
+        int8_t value = latest_map_->data[index];
+
+        // Unknown map cell
+        //if (value == -1)
+        //{
+        //    return false;
+        //}
+
+        // Occupied map cell
+        if (value >= occupied_threshold_)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+    
+
+
+
+   
+    int countOpenSectors(const std::vector<bool> &open_rays)
+    {
+        if (open_rays.empty()) {return 0;}
+
+        int minimum_rays = static_cast<int>(std::ceil(minimum_opening_deg_ /angle_resolution_deg_ ));
+
+
+        // Considering that angle directions form circle, its easiest to start with a known blocked angle index first
+        int blocked_index = -1;
+
+        for (size_t i = 0; i < open_rays.size(); i++)
+        {
+            if (!open_rays[i])
+            {
+                blocked_index = static_cast<int>(i);
+                break;
+            }
+        }
+
+        
+        if (blocked_index == -1)
+        {
+            return 1; // Everything around the robot is open so treat it as one large open region rather than many branches.
+        }
+
+        int openings = 0;
+        int current_open_length = 0;
+        int size = static_cast<int>(open_rays.size());
+
+        for (int offset = 1; offset <= size; offset++)
+        {
+            int index = (blocked_index + offset) % size;
+
+            if (open_rays.at(index))
+            {
+                current_open_length++;
+            }
+            else
+            {
+                if (current_open_length >= minimum_rays)
+                {
+                    openings++;
+                }
+
+                current_open_length = 0;
+            }
+        }
+
+        // Deal with a sector ending at the final checked ray.
+        if (current_open_length >= minimum_rays)
+        {
+            openings++;
+        }
+
+
+        return openings;
+    }
+
+    bool worldToGrid(double world_x, double world_y, int &grid_x, int &grid_y)
+    {
+        double origin_x = latest_map_->info.origin.position.x;
+        double origin_y = latest_map_->info.origin.position.y;
+        double resolution = latest_map_->info.resolution;
+
+
+        grid_x = static_cast<int>(std::floor((world_x - origin_x) / resolution));
+        grid_y = static_cast<int>(std::floor((world_y - origin_y) / resolution));
+
+        if (grid_x < 0 || grid_y < 0 || grid_x >=static_cast<int>(latest_map_->info.width) || grid_y >= static_cast<int>(latest_map_->info.height))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+
+    bool nodeNearby(double x, double y)
+    {
+        for (const auto &node : nodes_)
+        {
+            double dx = x - node.x;
+            double dy = y - node.y;
+            double distance = std::sqrt(dx * dx + dy * dy);
+
+            if (distance < minimum_node_distance_)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+
+
+    void saveJunctionNode(double x, double y, double yaw)
+    {
+        JunctionNode node;
+        node.x = x;
+        node.y = y;
+        node.yaw = yaw;
+        nodes_.push_back(node);
+
+        RCLCPP_INFO(this->get_logger(),"JUNCTION SAVED"); 
+        RCLCPP_INFO(this->get_logger(), "Position: x=%.3f y=%.3f", x, y);
+
+        saveNodes();
+    }
+
+
+    void saveNodes()
+    {
+        if (nodes_.empty())
+        {
+            return;
+        }
+
+        std::ofstream file(save_file_);
+
+        if (!file.is_open())
+        {
+            RCLCPP_ERROR(this->get_logger(), "Could not open %s", save_file_.c_str());
+            return;
+        }
+
+        file << "frame_id: husky1_map\n";
+        file << "nodes:\n";
+
+        for (const auto &node : nodes_)
+        {
+
+            file
+                << "    x: "
+                << node.x
+                << "\n";
+
+            file
+                << "    y: "
+                << node.y
+                << "\n";
+
+            file
+                << "    yaw: "
+                << node.yaw
+                << "\n";
+        }
+
+        file.close();
+
+
+        RCLCPP_INFO(this->get_logger(), "Saved %zu junction nodes to %s", nodes_.size(), save_file_.c_str());
+    }
+
+
+    double getYaw(const geometry_msgs::msg::Quaternion &q)
+    {
+        double siny_cosp = 2.0 *(q.w * q.z + q.x * q.y);
+        double cosy_cosp = 1.0 - 2.0 *(q.y * q.y + q.z * q.z);
+
+        return std::atan2(siny_cosp, cosy_cosp);
+    }
+
+};
+
+int main(int argc,char * argv[])
+{
+    rclcpp::init(argc, argv);
+
+
+    auto node = std::make_shared<JunctionRecorder>();
+
+
+    rclcpp::spin(node);
+
+
+    rclcpp::shutdown();
+
+
+    return 0;
+}
