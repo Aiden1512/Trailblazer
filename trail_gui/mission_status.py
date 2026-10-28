@@ -4,6 +4,8 @@ What the real robot is doing: obstacle detection and mission progress, via ROS 2
     /husky1/obstacle_detected   std_msgs/Bool    warn  - obstacle in the warn range   (ground_filter, every lidar frame)
     /husky1/obstacle_stop       std_msgs/Bool    stop  - obstacle in the stop range   (ground_filter, every lidar frame)
     /husky1/mission_status      std_msgs/String  one-line mission progress         (mission_manager, latched)
+    /husky1/water_detected      std_msgs/Bool    water (blue ground) in slow range (water_guard, every camera frame)
+    /husky1/water_stop          std_msgs/Bool    forward teleop blocked by water   (water_guard, every camera frame)
     /husky1/start_mission       std_srvs/Trigger starts the inspection             (mission_manager holds until called)
 
 MissionStatusFeed listens in a background thread and keeps the latest values;
@@ -35,7 +37,10 @@ WARN_TOPIC = "/husky1/obstacle_detected"
 STOP_TOPIC = "/husky1/obstacle_stop"
 MISSION_TOPIC = "/husky1/mission_status"
 START_SERVICE = "/husky1/start_mission"
+WATER_WARN_TOPIC = "/husky1/water_detected"
+WATER_STOP_TOPIC = "/husky1/water_stop"
 STALE_AFTER_S = 2.0                       # the detector publishes every lidar frame (~10 Hz)
+WATER_STALE_AFTER_S = 3.0                 # water_guard publishes every camera frame (~3 Hz)
 
 
 class MissionStatusFeed:
@@ -47,6 +52,9 @@ class MissionStatusFeed:
         self._stop = False
         self._mission_text = None
         self._last_detector_time = None
+        self._water_warn = False
+        self._water_stop = False
+        self._last_water_time = None
         self._startup_error = ""
         self._start_client = None
         self.start_results = queue.Queue()
@@ -72,6 +80,8 @@ class MissionStatusFeed:
             self._node = Node(f"trailblazer_gui_status_{os.getpid()}")
             self._node.create_subscription(Bool, WARN_TOPIC, self._on_warn, 10)
             self._node.create_subscription(Bool, STOP_TOPIC, self._on_stop, 10)
+            self._node.create_subscription(Bool, WATER_WARN_TOPIC, self._on_water_warn, 10)
+            self._node.create_subscription(Bool, WATER_STOP_TOPIC, self._on_water_stop, 10)
             # mission_manager latches its last status, so we get it even if it was sent before we started.
             latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                  durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -128,6 +138,16 @@ class MissionStatusFeed:
             self._stop = msg.data
             self._last_detector_time = time.monotonic()
 
+    def _on_water_warn(self, msg):
+        with self._lock:
+            self._water_warn = msg.data
+            self._last_water_time = time.monotonic()
+
+    def _on_water_stop(self, msg):
+        with self._lock:
+            self._water_stop = msg.data
+            self._last_water_time = time.monotonic()
+
     def _on_mission(self, msg):
         with self._lock:
             self._mission_text = msg.data
@@ -164,6 +184,16 @@ class MissionStatusFeed:
         if last is None or time.monotonic() - last > STALE_AFTER_S:
             return None, text
         return ("stop" if stop else "warn" if warn else "clear"), text
+
+    def get_water(self):
+        """Return 'stop', 'warn', 'clear', or None while water_guard isn't
+        publishing (not running, or it has no camera frames)."""
+        with self._lock:
+            last = self._last_water_time
+            warn, stop = self._water_warn, self._water_stop
+        if last is None or time.monotonic() - last > WATER_STALE_AFTER_S:
+            return None
+        return "stop" if stop else "warn" if warn else "clear"
 
     def status(self):
         """Return (state, text) for the detector connection; state is one of

@@ -9,8 +9,9 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <!-- Runtime dependencies used by ground_filter.cpp -->
+  <!-- Runtime dependencies used by ground_filter.cpp and water_guard.cpp -->
   <depend>rclcpp</depend>
+  <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
 

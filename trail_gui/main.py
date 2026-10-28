@@ -98,7 +98,8 @@ class TrailBlazerApp:
                                       snapshot_feed=self.snapshot_feed)
             self.phase1 = Phase1Frame(self.notebook, self.state, on_finish_mapping=self._go_to_phase2,
                                       on_back=self.show_start, pose_feed=self.pose_feed,
-                                      on_reset=self.phase2.clear_obstacles, camera_feed=self.camera_feed)
+                                      on_reset=self.phase2.clear_obstacles, camera_feed=self.camera_feed,
+                                      status_feed=self.status_feed)
         except Exception:
             self._stop_feeds()       # don't leave ROS threads running if startup fails
             raise

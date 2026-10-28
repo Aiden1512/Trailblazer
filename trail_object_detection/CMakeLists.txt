@@ -7,6 +7,7 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
@@ -15,7 +16,10 @@ include_directories(include)
 add_executable(ground_filter src/ground_filter.cpp)
 ament_target_dependencies(ground_filter rclcpp sensor_msgs std_msgs)
 
-install(TARGETS ground_filter DESTINATION lib/${PROJECT_NAME})
+add_executable(water_guard src/water_guard.cpp)
+ament_target_dependencies(water_guard rclcpp geometry_msgs sensor_msgs std_msgs)
+
+install(TARGETS ground_filter water_guard DESTINATION lib/${PROJECT_NAME})
 
 # ROS-free tests (plain asserts): `colcon test --packages-select trail_object_detection`
 if(BUILD_TESTING)
@@ -23,6 +27,8 @@ if(BUILD_TESTING)
   add_test(NAME test_obstacle_logic COMMAND test_obstacle_logic)
   add_executable(test_scenarios test/test_scenarios.cpp)
   add_test(NAME test_scenarios COMMAND test_scenarios)
+  add_executable(test_water_logic test/test_water_logic.cpp)
+  add_test(NAME test_water_logic COMMAND test_water_logic)
 endif()
 
 ament_package()

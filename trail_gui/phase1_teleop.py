@@ -31,10 +31,19 @@ MIN_NODE_SPACING = 55           # cm of travel between auto-dropped waypoint nod
 TURN_ANGLE_DEG = 40             # a bend sharper than this turns the corner node into a junction
 JUNCTION_MERGE_CM = 5           # a manual junction this close to the last node just upgrades it
 
+# water_guard (trail_object_detection) watches the camera for blue ground and
+# blocks forward teleop near it; this tab only reports what it is doing.
+WATER_TEXT = {
+    "stop": ("Water: TOO CLOSE - forward blocked, reverse or turn away", "#c0392b"),
+    "warn": ("Water: ahead - forward speed reduced", "#b26a00"),
+    "clear": ("Water: none ahead", "#2e7d32"),
+    None: ("Water guard: not running (or no camera)", "#b26a00"),
+}
+
 
 class Phase1Frame(ttk.Frame):
     def __init__(self, parent, state: TrailState, on_finish_mapping, on_back,
-                 pose_feed=None, on_reset=None, camera_feed=None):
+                 pose_feed=None, on_reset=None, camera_feed=None, status_feed=None):
         super().__init__(parent)
         self.state = state
         self.on_finish_mapping = on_finish_mapping
@@ -42,6 +51,7 @@ class Phase1Frame(ttk.Frame):
         self.pose_feed = pose_feed
         self.on_reset = on_reset
         self.camera_feed = camera_feed
+        self.status_feed = status_feed
 
         self.running = False
         self._tick_job = None
@@ -101,7 +111,12 @@ class Phase1Frame(ttk.Frame):
         self.sim_label = ttk.Label(right, textvariable=self.sim_var, wraplength=250, justify="left")
         self.sim_label.pack(anchor="w")
         ttk.Label(right, textvariable=self.pos_var).pack(anchor="w")
-        ttk.Label(right, textvariable=self.node_var).pack(anchor="w", pady=(0, 12))
+        ttk.Label(right, textvariable=self.node_var).pack(anchor="w")
+        self.water_var = tk.StringVar()
+        self.water_label = ttk.Label(right, textvariable=self.water_var, wraplength=250, justify="left")
+        if self.status_feed is not None:
+            self.water_label.pack(anchor="w")
+        ttk.Frame(right).pack(pady=(0, 12))      # gap before the next section
 
         if self.camera_feed is not None:
             CameraPanel(right, self.camera_feed).pack(anchor="w", pady=(0, 12))
@@ -234,3 +249,7 @@ class Phase1Frame(ttk.Frame):
         else:
             self.pos_var.set(f"Position: ({int(self.robot_x)}, {int(self.robot_y)}) cm")
         self.node_var.set(f"Nodes recorded: {len(self.state.nodes)}")
+        if self.status_feed is not None:
+            text, colour = WATER_TEXT[self.status_feed.get_water()]
+            self.water_var.set(text)
+            self.water_label.configure(foreground=colour)

@@ -37,23 +37,46 @@ source install/setup.bash
     ```bash
    ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py slam:=true nav2:=true rviz:=true world:=obstacle_world
    ```
+2. Start the GUI:
 
-2. Start LiDAR obstacle detection:
+   ```bash
+   ros2 run trailblazer_gui main.py
+   ```
+
+3. Start LiDAR obstacle detection:
 
    ```bash
    ros2 run trail_object_detection ground_filter
    ```
 
-3. Start the mission manager:
+   Start the camera water guard (stops Phase 1 teleop driving into the blue pond):
+
+   ```bash
+   ros2 run trail_object_detection water_guard
+   ```
+
+   For Phase 1, drive with teleop publishing to `/husky1/cmd_vel_teleop` (not
+   `/husky1/cmd_vel`) so its commands pass through the guard:
+
+   ```bash
+   ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r cmd_vel:=/husky1/cmd_vel_teleop
+   ```
+   or
+   ```bash
+   ros2 run husky_mapping husky_wasd_node --ros-args -r /husky1/cmd_vel:=/husky1/cmd_vel_teleop
+   ```
+
+   The guard slows forward driving when blue ground is within 1.8 m ahead and
+   blocks it inside 0.9 m; reversing and turning always work. It also blocks
+   forward driving if no camera frames arrive. Phase 2 (Nav2) publishes to
+   `/husky1/cmd_vel` directly and isn't affected. To see what it detects, view
+   `/husky1/water_debug` in RViz or `rqt_image_view` (water in the robot's path
+   is painted red).
+
+4. Start the mission manager:
 
    ```bash
    ros2 run trail_decision_making mission_manager_node --ros-args -r __ns:=/husky1 --params-file ~/Trailblazer/trail_decision_making/config/mission_manager.yaml -r /tf:=/husky1/tf -r /tf_static:=/husky1/tf_static
-   ```
-
-4. Start the GUI:
-
-   ```bash
-   ros2 run trailblazer_gui main.py
    ```
 
 5. To override the GUI button and automatically start the mission:
