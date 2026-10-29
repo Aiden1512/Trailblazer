@@ -10,6 +10,78 @@ source /opt/ros/humble/setup.bash
 colcon build --symlink-install
 ```
 
+## PHASE 1: Manual mapping and object-detection workflow (run in order)
+
+If you are doing the manual map-creation and detection workflow, run the commands below in this order, one command per terminal unless noted otherwise. These are the steps for setting up the simulation, teleoperating the robot, saving a map, and launching the YOLO-based detection node.
+
+1. Set the OpenGL compatibility variables for Gazebo / Ignition rendering:
+
+   ```bash
+   export LIBGL_ALWAYS_SOFTWARE=1
+   export MESA_GL_VERSION_OVERRIDE=3.3
+   ```
+
+   These fix rendering issues on systems without full hardware OpenGL support.
+
+2. Launch the Husky simulation in the trail world without Nav2, and open RViz:
+
+   ```bash
+   ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py slam:=true nav2:=false rviz:=true world:=trail_world
+   ```
+
+   This starts the simulated robot and the local SLAM / visualization stack for manual driving and mapping.
+
+3. Start keyboard teleoperation for the Husky:
+
+   ```bash
+   ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r cmd_vel:=/husky1/cmd_vel
+   ```
+
+   This lets you drive the robot manually through the environment while collecting the map.
+
+4. Start the path recorder to log the robot trajectory:
+
+   ```bash
+   ros2 run husky_mapping path_recorder
+   ```
+
+   This records the path travelled so the map can be reconstructed or saved later.
+
+5. Save the generated map to disk:
+
+   ```bash
+   ros2 run nav2_map_server map_saver_cli -f ~/FILEPATH/FILENAME --ros-args -r map:=/husky1/map
+   ```
+
+   This writes the current occupancy map to a file for later use in autonomous navigation.
+
+6. Start the Husky WASD teleop node:
+
+   ```bash
+   ros2 run husky_mapping husky_wasd_node
+   ```
+
+   This runs a direct keyboard-driving node for the Husky when you want a simple manual drive interface.
+
+7. Run the repository's YOLO ROS detection node:
+
+   ```bash
+   python ~/41068_ws/src/Trailblazer/image_detection/yolo_ros_node.py
+   ```
+
+   This launches the object-detection pipeline using the YOLO model in this project.
+
+8. If using the alternate YOLOE environment, activate it and run the alternate node:
+
+   ```bash
+   source yoloe_env/bin/activate
+   python ~/yoloe_test/yolo_ros_node.py
+   ```
+
+   These commands switch to a separate YOLOE environment for the alternate detection script.
+
+
+## PHASE 2: Autonomous inspection phase
 Start each command below in a **separate terminal**. In each terminal, first run:
 
 ```bash
