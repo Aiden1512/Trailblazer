@@ -1,13 +1,10 @@
-// Synthetic replay: ray-casts trail_world-sized obstacles with the real sensor
-// model (0.80 m high, 360 azimuth samples, 0.01 m gaussian range noise, min
-// range 0.2 m) and runs the perception core on the resulting clouds.
-// Sizes come from the measured trail_world models. ROS-free.
-#include <cassert>
+// Scenario test with no sim. Ray-casts trail_world-sized objects with the real sensor model
+// (0.80 m high, 360 samples per ring, 1 cm noise, 0.2 m min range) and runs the filter on the result.
+// Compares the old filter (single point within 0.45 m) against the current one.
+// Run with an optional ring spacing in degrees, e.g. ./test_scenarios 4. Default is 2.5 (33 rings).
 #include <cmath>
 #include <cstdio>
-#include <functional>
 #include <random>
-#include <string>
 #include <vector>
 
 #include "trail_object_detection/obstacle_logic.hpp"
@@ -16,7 +13,7 @@ using namespace trail_object_detection;
 
 struct Pt { float x, y, z; };
 
-// ---- scene primitives (sensor frame, ground at z = -0.80) ----
+// Scene objects, in the sensor frame (ground at z = -0.80)
 struct Cyl { double cx, cy, r, z0, z1; };
 struct Box { double x0, x1, y0, y1, z0, z1; };
 struct Scene { std::vector<Cyl> cyls; std::vector<Box> boxes; };
@@ -58,7 +55,7 @@ static double hitBox(const Box &b, double dx, double dy, double dz)
 }
 
 static std::vector<double> ringsOld16() { std::vector<double> r; for (int i = 0; i < 16; ++i) r.push_back(-15 + 2.0 * i); return r; }
-static double g_step = 2.5; // vertical spacing of the new ring set (deg)
+static double g_step = 2.5; // Ring spacing of the new layout in degrees. 2.5 over +-40 is 33 rings
 static std::vector<double> ringsNew17() { std::vector<double> r; const int n = int(std::lround(80.0 / g_step)) + 1; for (int i = 0; i < n; ++i) r.push_back(-40 + g_step * i); return r; }
 
 static std::mt19937 rng(42);
@@ -66,16 +63,16 @@ static std::mt19937 rng(42);
 static std::vector<Pt> scan(const Scene &s, const std::vector<double> &rings_deg)
 {
   Scene sc = s;
-  // Robot's own body below the sensor (top plate, chassis, bumpers) is rendered by gpu_lidar too.
+  // gpu_lidar sees the robot's own chassis and bumpers too, so add them to every scene
   sc.boxes.push_back({-0.49, 0.49, -0.285, 0.285, -0.68, -0.43});
   std::normal_distribution<double> noise(0.0, 0.01);
   std::vector<Pt> pts;
   for (double el : rings_deg)
   {
-    const double e = el * kPi / 180.0;
+    const double e = el * M_PI / 180.0;
     for (int k = 0; k < 360; ++k)
     {
-      const double az = k * kPi / 180.0;
+      const double az = k * M_PI / 180.0;
       const double dx = std::cos(e) * std::cos(az), dy = std::cos(e) * std::sin(az), dz = std::sin(e);
       double t = 40;
       if (dz < 0) t = std::min(t, -0.80 / dz);
@@ -91,7 +88,7 @@ static std::vector<Pt> scan(const Scene &s, const std::vector<double> &rings_deg
 
 struct Result { size_t warn, stop; bool stopBool, warnBool; };
 
-// Run n identical frames through the new logic with the default debounce (2 on / 3 off).
+// Runs 3 identical frames through the current logic (3 points, 2 frames on, 3 off)
 static Result runNew(const std::vector<Pt> &cloud, const Params &p = Params())
 {
   Debouncer wd(2, 3), sd(2, 3);
@@ -103,8 +100,7 @@ static Result runNew(const std::vector<Pt> &cloud, const Params &p = Params())
   return {c.warn, c.stop, st, w};
 }
 
-// The OLD groupmate rule (ground_filter.cpp in the zip): z in [-0.72, 1.5], x>0,
-// range <= 0.45 from the sensor, |y|<=0.5, a single point stops, no debounce.
+// The old rule: one point with z in [-0.72, 1.5], x > 0, range <= 0.45 from the sensor, |y| <= 0.5 stops the robot, no debounce
 static bool oldStop(const std::vector<Pt> &cloud)
 {
   size_t n = 0;
@@ -150,13 +146,12 @@ int main(int argc, char **argv)
     CHECK(r.warnBool == c.expectWarn, c.name);
   }
 
-  // ---- Approach sweeps: first distance (from bumper) at which a low object produces a stop-zone/warn detection ----
+  // Drive at each low object from 3 m out and record where it is first seen and the longest gap after that
   std::printf("\nApproach check (object front distance from bumper -> detected?)\n");
   struct Obj { const char *name; double r, h; };
   const Obj objs[] = {{"mushroom 0.12 m", 0.06, 0.12}, {"mushroom 0.15 m", 0.08, 0.15}, {"flower 0.20 m", 0.05, 0.20}, {"fence 0.25 m (2 m wide)", 0, 0.25}};
   for (auto &o : objs)
   {
-    std::string seen;
     double firstSeen = -1, gapStart = -1, worstGap = 0;
     for (double ahead = 3.0; ahead >= 0.05; ahead -= 0.05)
     {

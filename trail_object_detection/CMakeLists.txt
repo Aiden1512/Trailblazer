@@ -12,12 +12,13 @@ find_package(std_msgs REQUIRED)
 
 include_directories(include)
 
+# The LiDAR node. Run with: ros2 run trail_object_detection ground_filter
 add_executable(ground_filter src/ground_filter.cpp)
 ament_target_dependencies(ground_filter rclcpp sensor_msgs std_msgs)
 
 install(TARGETS ground_filter DESTINATION lib/${PROJECT_NAME})
 
-# ROS-free tests (plain asserts): `colcon test --packages-select trail_object_detection`
+# Tests need no ROS or sim. Run with: colcon test --packages-select trail_object_detection
 if(BUILD_TESTING)
   add_executable(test_obstacle_logic test/test_obstacle_logic.cpp)
   add_test(NAME test_obstacle_logic COMMAND test_obstacle_logic)
