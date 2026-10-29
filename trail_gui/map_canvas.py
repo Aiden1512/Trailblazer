@@ -146,7 +146,7 @@ class MapCanvas(tk.Canvas):
             self.create_oval(sx - NODE_RADIUS, sy - NODE_RADIUS,
                               sx + NODE_RADIUS, sy + NODE_RADIUS,
                               fill=fill, outline="#1c3a5e", width=2, tag=tag)
-            if numbered:
+            if numbered and node.kind == "junction":
                 self.create_text(sx, sy - NODE_RADIUS - 10, text=str(node.order),
                                   font=("Arial", 8, "bold"), fill="#1c3a5e", tag=tag)
 

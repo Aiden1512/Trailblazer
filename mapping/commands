@@ -5,7 +5,7 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r cmd_vel:=/hus
 ros2 run husky_mapping path_recorder
 ros2 run nav2_map_server map_saver_cli -f ~/FILEPATH/FILENAME --ros-args -r map:=/husky1/map
 ros2 run husky_mapping husky_wasd_node
-python ~/41068_ws/src/Trailblazer/image_detecyion/yolo_ros_node.py
+python ~/41068_ws/src/Trailblazer/image_detection/yolo_ros_node.py
 
 
 source yoloe_env/bin/activate

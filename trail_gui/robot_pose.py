@@ -16,6 +16,7 @@ import math
 import os
 import threading
 import time
+import json
 
 import ros_context
 
@@ -25,6 +26,8 @@ try:
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import qos_profile_sensor_data
     from nav_msgs.msg import Odometry
+    from std_msgs.msg import String
+    from std_srvs.srv import Trigger
     ROS_AVAILABLE = True
     _ROS_IMPORT_ERROR = ""
 except Exception as exc:                  # normally ImportError; never let it crash the GUI
@@ -55,7 +58,9 @@ class RobotPoseFeed:
     def __init__(self, topic=DEFAULT_TOPIC):
         self.topic = topic
         self._lock = threading.Lock()
-        self._pose = None                 # (x_cm, y_cm, yaw_rad)
+        self._pose = None
+        self._graph = None
+        self._graph_version = 0                 # (x_cm, y_cm, yaw_rad)
         self._last_time = None
         self._startup_error = ""
 
@@ -80,6 +85,8 @@ class RobotPoseFeed:
             self._node = Node(f"trailblazer_gui_pose_{os.getpid()}")
             self._node.create_subscription(Odometry, self.topic, self._on_odom,
                                            qos_profile_sensor_data)
+            self._graph_sub = self._node.create_subscription(String, "/husky1/trail_graph", self._on_graph, 10)
+            self._reset_client = self._node.create_client(Trigger, "/husky1/reset_trail_graph")
             self._executor = SingleThreadedExecutor()
             self._executor.add_node(self._node)
         except Exception as exc:
@@ -119,7 +126,7 @@ class RobotPoseFeed:
             except Exception:
                 break
 
-    # ---------------- ROS callback (runs in the ROS thread) ----------------
+    # ---------------- ROS callbacks (runs in the ROS thread) ----------------
     def _on_odom(self, msg):
         pos = msg.pose.pose.position
         q = msg.pose.pose.orientation
@@ -130,12 +137,33 @@ class RobotPoseFeed:
             self._pose = (x_cm, y_cm, yaw)
             self._last_time = time.monotonic()
 
+    def _on_graph(self, msg):
+        try:
+            graph = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+
+        with self._lock:
+            self._graph = graph
+            self._graph_version += 1
+
+    def reset_graph(self):
+        if self._node is None or not self._reset_client.service_is_ready():
+            return False
+
+        self._reset_client.call_async(Trigger.Request())
+        return True
+
     # ---------------- GUI-facing API ----------------
     def get_pose(self):
         """Latest (x_cm, y_cm, yaw_rad) in map coordinates (origin at the map
         centre, +x right, +y up), or None if nothing has been received yet."""
         with self._lock:
             return self._pose
+            
+    def get_graph(self):
+        with self._lock:
+            return self._graph_version, self._graph
 
     def status(self):
         """Return (state, text); state is one of

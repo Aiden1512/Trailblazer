@@ -10,6 +10,9 @@
 #include <vector>
 #include <visualization_msgs/msg/marker.hpp>
 #include <std_msgs/msg/color_rgba.hpp>
+#include <std_msgs/msg/string.hpp>
+#include <sstream>
+#include <std_srvs/srv/trigger.hpp>
 
 struct JunctionNode
 {   
@@ -51,6 +54,34 @@ public:
         pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("/husky1/pose", 10, std::bind(&JunctionRecorder::poseCallback, this, std::placeholders::_1));
         map_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>("/husky1/map", 10, std::bind(&JunctionRecorder::mapCallback, this, std::placeholders::_1));
         ray_marker_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/husky1/junction_rays", 10);
+        graph_pub_ = this->create_publisher<std_msgs::msg::String>("/husky1/trail_graph", 10);
+        reset_service_ = this->create_service<std_srvs::srv::Trigger>("/husky1/reset_trail_graph", [this](
+            const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+            std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+                {
+                    (void)request;
+
+                    // Clear and reset all 
+                    nodes_.clear();
+                    trails_.clear();
+                    next_junction_id_ = 1;
+                    next_trail_id_ = 1;
+                    current_trail_index_ = -1;
+                    active_junction_id_ = -1;
+                    consecutive_detections_ = 0;
+                    has_last_waypoint_ = false;
+                    last_waypoint_x_ = 0.0;
+                    last_waypoint_y_ = 0.0;
+
+                    // Save empty graph and publish to GUI
+                    saveNodes();
+
+                    RCLCPP_INFO(this->get_logger(), "Trail graph reset");
+
+                    response->success = true;
+                    response->message = "Trail graph reset";
+                }
+);
         RCLCPP_INFO(this->get_logger(), "Junction recorder started.");
     }
 
@@ -65,6 +96,8 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pose_sub_;
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr ray_marker_pub_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr graph_pub_;
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_service_;
     nav_msgs::msg::OccupancyGrid::SharedPtr latest_map_;
     std::vector<JunctionNode> nodes_;
 
@@ -567,6 +600,7 @@ void saveNodes()
     file.close();
 
     RCLCPP_INFO( this->get_logger(),"Saved %zu junctions and %zu trails to %s", nodes_.size(), trails_.size(), save_file_.c_str());
+    publishGraph();
 
     }
 
@@ -580,7 +614,58 @@ void saveNodes()
         return std::atan2(siny_cosp, cosy_cosp);
     }
 
+    void publishGraph()
+{
+    std::ostringstream out;
+
+    out << "{\"junctions\":[";
+
+    for (size_t i = 0; i < nodes_.size(); ++i)
+    {
+        if (i > 0) out << ",";
+
+        out << "{\"id\":" << nodes_[i].id
+            << ",\"x\":" << nodes_[i].x
+            << ",\"y\":" << nodes_[i].y << "}";
+    }
+
+    out << "],\"trails\":[";
+
+    for (size_t i = 0; i < trails_.size(); ++i)
+    {
+        if (i > 0) out << ",";
+
+        const auto &trail = trails_[i];
+
+        out << "{\"id\":" << trail.id
+            << ",\"start_junction\":" << trail.start_junction
+            << ",\"end_junction\":" << trail.end_junction
+            << ",\"waypoints\":[";
+
+        for (size_t j = 0; j < trail.waypoints.size(); ++j)
+        {
+            if (j > 0) out << ",";
+
+            out << "{\"x\":" << trail.waypoints[j].x
+                << ",\"y\":" << trail.waypoints[j].y << "}";
+        }
+
+        out << "]}";
+    }
+
+    out << "]}";
+
+    std_msgs::msg::String msg;
+    msg.data = out.str();
+    graph_pub_->publish(msg);
+}
+
 };
+
+
+
+
+
 
 int main(int argc,char * argv[])
 {
