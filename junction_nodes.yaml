@@ -1,0 +1,12 @@
+frame_id: husky1_map
+nodes:
+  - id: 0
+    x: -4.75792
+    y: 4.93853
+    yaw: -2.38798
+    branches: 3
+  - id: 1
+    x: -5.83313
+    y: 6.59387
+    yaw: 0.326751
+    branches: 4

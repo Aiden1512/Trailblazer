@@ -26,6 +26,7 @@ namespace trail_decision_making
         max_goal_retries_ = declare_parameter<int>("max_goal_retries", 3);
         retry_delay_sec_ = declare_parameter<double>("retry_delay_sec", 2.0);
         obstacle_wait_sec_ = declare_parameter<double>("obstacle_wait_sec", 4.0);
+        auto_start_ = declare_parameter<bool>("auto_start", false);
 
         // Initialize TF buffer and listener, and the navigation action client
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
@@ -38,8 +39,67 @@ namespace trail_decision_making
             std::bind(&MissionManager::obstacleStopCallback, this, _1));
         RCLCPP_INFO(get_logger(), "Subscribed to /husky1/obstacle_stop");
 
+        // Latched so the GUI gets the current status even if it starts after us
+        status_pub_ = create_publisher<std_msgs::msg::String>(
+            "/husky1/mission_status", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
+        // The mission is held until the GUI's start button calls this service (unless auto_start is set)
+        start_srv_ = create_service<std_srvs::srv::Trigger>(
+            "/husky1/start_mission",
+            std::bind(&MissionManager::onStartRequest, this, _1, _2));
+
+        if (auto_start_)
+        {
+            publishStatus("Waiting to start");
+            start_timer_ = create_wall_timer(1s, [this]()
+                                             { startMission(); });
+        }
+        else
+        {
+            RCLCPP_INFO(get_logger(), "Holding: call /husky1/start_mission to start the inspection");
+            publishStatus("Ready - waiting for the start command");
+        }
+    }
+
+    // Called when the operator presses "Start Autonomous Inspection" in the GUI. Checks the
+    // trail graph can be loaded, then hands over to the start timer, which retries startMission()
+    // every second until localisation is available. Progress after this goes out on mission_status.
+    void MissionManager::onStartRequest(
+        const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+        std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+    {
+        if (mission_active_)
+        {
+            response->success = false;
+            response->message = "Mission is already running";
+            return;
+        }
+        if (start_timer_ && !start_timer_->is_canceled())
+        {
+            response->success = false;
+            response->message = "Mission is already starting";
+            return;
+        }
+        loadGraph(); // check the graph now so a bad waypoints file is reported straight back to the GUI
+        if (graph_.edges().empty())
+        {
+            response->success = false;
+            response->message = "Cannot start: no trail graph loaded from '" + waypoints_file_ + "'";
+            publishStatus("Cannot start: trail graph has no edges");
+            return;
+        }
+
+        // Clear anything left over from a previous (finished or stopped) run
+        route_.clear();
+        current_goal_handle_.reset();
+        return_pass_pending_ = false;
+        return_pass_active_ = false;
+
+        RCLCPP_INFO(get_logger(), "Start command received");
+        publishStatus("Start command received");
         start_timer_ = create_wall_timer(1s, [this]()
                                          { startMission(); });
+        response->success = true;
+        response->message = "Mission starting (" + std::to_string(graph_.edges().size()) + " trail edges)";
     }
 
     // Load the trail graph from the YAML file specified in the waypoints_file_ parameter.
@@ -68,6 +128,7 @@ namespace trail_decision_making
         if (graph_.edges().empty())
         {
             RCLCPP_ERROR(get_logger(), "Mission cannot start: graph contains no edges");
+            publishStatus("Cannot start: trail graph has no edges");
             return;
         }
         // Check if TF is available before starting the mission
@@ -75,6 +136,7 @@ namespace trail_decision_making
         {
             RCLCPP_WARN(get_logger(), "Waiting for TF: %s -> %s",
                         global_frame_.c_str(), robot_frame_.c_str());
+            publishStatus("Waiting for localisation (" + global_frame_ + " -> " + robot_frame_ + ")");
             return;
         }
         // Get the robot's current pose in the global frame
@@ -92,6 +154,7 @@ namespace trail_decision_making
 
         start_timer_->cancel(); // cancel the timer so we don't try to start the mission again
         RCLCPP_INFO(get_logger(), "TF is available; starting mission");
+        publishStatus("Mission started");
         current_node_id_ = graph_.findNearestNode(
             transform.transform.translation.x,
             transform.transform.translation.y);
@@ -114,6 +177,9 @@ namespace trail_decision_making
             {
                 RCLCPP_INFO(get_logger(), "Mission complete (%.0f%% explored)",
                             graph_.explorationPercentage() * 100.0);
+                publishStatus("Mission complete (" +
+                              std::to_string(static_cast<int>(graph_.explorationPercentage() * 100.0)) +
+                              "% explored)");
                 mission_active_ = false;
                 return;
             }
@@ -236,6 +302,7 @@ namespace trail_decision_making
         {
             RCLCPP_ERROR(get_logger(), "Nav2 action server '%s' is not available",
                          nav_action_name_.c_str());
+            publishStatus("Stopped: Nav2 is not available");
             mission_active_ = false;
             return;
         }
@@ -270,12 +337,17 @@ namespace trail_decision_making
         {
             RCLCPP_INFO(get_logger(), "Sending transit goal to edge %d entry waypoint",
                         current_edge_id_);
+            publishStatus("Driving to the start of edge " + std::to_string(current_edge_id_));
         }
         else
         {
             RCLCPP_INFO(get_logger(), "Sending edge %d waypoint %zu/%zu: (%.2f, %.2f)",
                         current_edge_id_, current_waypoint_index_ + 1,
                         current_waypoints_.size(), waypoint.x, waypoint.y);
+            publishStatus("Edge " + std::to_string(current_edge_id_) +
+                          (return_pass_active_ ? " (return pass)" : "") + ": waypoint " +
+                          std::to_string(current_waypoint_index_ + 1) + "/" +
+                          std::to_string(current_waypoints_.size()));
         }
 
         // Send the goal to Nav2 and set up callbacks for feedback and result
@@ -286,6 +358,7 @@ namespace trail_decision_making
             if (!goal_handle)
             {
                 RCLCPP_ERROR(get_logger(), "Nav2 rejected the navigation goal");
+                publishStatus("Stopped: Nav2 rejected the goal");
                 mission_active_ = false;
                 return;
             }
@@ -324,6 +397,8 @@ namespace trail_decision_making
                             "Nav2 aborted edge %d waypoint %zu; retrying in %.1f s (%d/%d)",
                             current_edge_id_, current_waypoint_index_ + 1,
                             retry_delay_sec_, goal_retry_count_, max_goal_retries_);
+                publishStatus("Nav2 aborted; retrying waypoint (" + std::to_string(goal_retry_count_) +
+                              "/" + std::to_string(max_goal_retries_) + ")");
                 retry_timer_ = create_wall_timer(
                     std::chrono::duration<double>(retry_delay_sec_), [this]()
                     {
@@ -337,6 +412,7 @@ namespace trail_decision_making
             RCLCPP_ERROR(get_logger(),
                          "Nav2 failed edge %d: action result code=%d",
                          current_edge_id_, static_cast<int>(result.code));
+            publishStatus("Stopped: Nav2 failed edge " + std::to_string(current_edge_id_));
             mission_active_ = false;
             return;
         }
@@ -381,6 +457,7 @@ namespace trail_decision_making
         if (return_pass_active_) // if we just finished the return pass of an uninspected edge, we mark it as inspected and clear the return pass flags
         {
             graph_.setEdgeStatus(current_edge_id_, EdgeStatus::INSPECTED); // mark the edge as inspected
+            publishStatus("Edge " + std::to_string(current_edge_id_) + " inspected");
             return_pass_pending_ = false;
             return_pass_active_ = false;
         }
@@ -452,6 +529,13 @@ namespace trail_decision_making
                 RCLCPP_INFO(get_logger(), "Obstacle stop cleared");
             }
         }
+    }
+
+    void MissionManager::publishStatus(const std::string &text)
+    {
+        std_msgs::msg::String msg;
+        msg.data = text;
+        status_pub_->publish(msg);
     }
 
     // This method is called when we receive feedback from Nav2 about the current navigation goal.
