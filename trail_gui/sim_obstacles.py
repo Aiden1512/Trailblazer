@@ -8,6 +8,9 @@ away again). It does this by calling the `ign service` command line tool
 (`gz service` on newer Gazebo), the same toolchain the simulation is launched
 with, so nothing extra needs installing.
 
+The model spawned is the world's hidden-obstacle model (Brown_Rock), placed on
+the ground at the clicked position instead of buried at z = -5.
+
 Map coordinates are centimetres with the origin at the map centre; the sim's
 world origin is the same point and its units are metres, so
     world_metres = map_cm / 100.
@@ -24,23 +27,22 @@ import subprocess
 import threading
 import time
 
-OBSTACLE_WIDTH_M = 0.6          # footprint of the box
-OBSTACLE_HEIGHT_M = 1.0         # tall enough for the lidar to see it
+OBSTACLE_MODEL = os.environ.get("TRAILBLAZER_OBSTACLE_MODEL", "Brown_Rock")   # the world's hidden-obstacle model
+OBSTACLE_Z_M = 0.0              # the world buries these at z = -5; spawning at 0 puts them on the ground
 CALL_TIMEOUT_MS = 5000
 
+# The same <include> the world file uses for its hidden obstacles, but placed on the ground
+# where the operator clicked. model://Brown_Rock is resolved through GZ_SIM_RESOURCE_PATH /
+# IGN_GAZEBO_RESOURCE_PATH, exactly as it is when the world loads.
 _SDF = ("<?xml version='1.0'?>"
-        "<sdf version='1.8'><model name='{name}'><static>true</static>"
+        "<sdf version='1.8'><include>"
+        "<uri>model://{model}</uri><name>{name}</name>"
         "<pose>{x:.3f} {y:.3f} {z:.3f} 0 0 0</pose>"
-        "<link name='link'>"
-        "<collision name='collision'><geometry><box><size>{w} {w} {h}</size></box></geometry></collision>"
-        "<visual name='visual'><geometry><box><size>{w} {w} {h}</size></box></geometry>"
-        "<material><ambient>0.9 0.3 0.1 1</ambient><diffuse>0.9 0.3 0.1 1</diffuse></material></visual>"
-        "</link></model></sdf>")
+        "</include></sdf>")
 
 
 def build_obstacle_sdf(name, x_m, y_m):
-    return _SDF.format(name=name, x=x_m, y=y_m, z=OBSTACLE_HEIGHT_M / 2,
-                       w=OBSTACLE_WIDTH_M, h=OBSTACLE_HEIGHT_M)
+    return _SDF.format(model=OBSTACLE_MODEL, name=name, x=x_m, y=y_m, z=OBSTACLE_Z_M)
 
 
 def _pb_string(text):
