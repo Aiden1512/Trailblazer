@@ -2,3 +2,6 @@ build/
 install/
 log/
 *:Zone.Identifier
+__pycache__/
+*.py[cod]
+.DS_Store
