@@ -35,7 +35,7 @@ source install/setup.bash
    or for obstacle world: 
 
     ```bash
-   ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py slam:=true nav2:=true rviz:=true world:=obstacle_world
+   ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py slam:=true nav2:=true rviz:=true world:=obstacle_world spawn_x:=6.5 spawn_y:=4 spawn_yaw:=3.14159
    ```
 2. Start the GUI:
 
@@ -49,7 +49,8 @@ source install/setup.bash
    ros2 run trail_object_detection ground_filter
    ```
 
-   Start the camera water guard (stops Phase 1 teleop driving into the blue pond):
+   The camera water guard (stops Phase 1 teleop driving into the blue pond) is
+   started by the launch file. To run it on its own instead:
 
    ```bash
    ros2 run trail_object_detection water_guard

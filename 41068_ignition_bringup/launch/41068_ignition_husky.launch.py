@@ -41,6 +41,11 @@ def generate_launch_description():
         choices=['simple_trees', 'large_demo', 'trail_world', 'obstacle_world'],
     ))
 
+    # Husky spawn position, passed on to 41068_ignition.launch.py
+    ld.add_action(DeclareLaunchArgument('spawn_x', default_value='0.0'))
+    ld.add_action(DeclareLaunchArgument('spawn_y', default_value='0.0'))
+    ld.add_action(DeclareLaunchArgument('spawn_yaw', default_value='0.0'))
+
     ld.add_action(IncludeLaunchDescription(
         PythonLaunchDescriptionSource(PathJoinSubstitution([
             FindPackageShare('41068_ignition_bringup'),
@@ -53,6 +58,9 @@ def generate_launch_description():
             'slam': slam,
             'nav2': nav2,
             'world': world,
+            'spawn_x': LaunchConfiguration('spawn_x'),
+            'spawn_y': LaunchConfiguration('spawn_y'),
+            'spawn_yaw': LaunchConfiguration('spawn_yaw'),
             'husky': 'True',
             'parrot': 'False',
         }.items(),

@@ -3,11 +3,13 @@ from launch.actions import (
     DeclareLaunchArgument,
     GroupAction,
     IncludeLaunchDescription,
+    OpaqueFunction,
     SetEnvironmentVariable,
     TimerAction,
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.utilities import normalize_to_list_of_substitutions, perform_substitutions
 from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -52,6 +54,7 @@ def add_robot(
     z,
     yaw='0.0',
     spawn_delay=0.0,
+    ekf_start_at_spawn=False,
 ):
     """Add one robot instance to the launch description.
 
@@ -94,22 +97,42 @@ def add_robot(
         condition=robot_enabled,
     ))
 
-    ld.add_action(Node(
-        package='robot_localization',
-        executable='ekf_node',
-        namespace=namespace,
-        name='robot_localization',
-        output='screen',
-        parameters=[
+    def _make_ekf(context):
+        ekf_params = [
             PathJoinSubstitution([config_path, localization_config]),
             {'use_sim_time': use_sim_time},
-        ],
-        remappings=[
-            ('/tf', 'tf'),
-            ('/tf_static', 'tf_static'),
-            ('odometry/filtered', 'odom'),
-        ],
-        condition=robot_enabled,
+        ]
+        # Start the EKF at the spawn pose so the map stays lined up with the world.
+        # This keeps the recorded route valid from any spawn point.
+        if ekf_start_at_spawn:
+            sx = float(perform_substitutions(context, normalize_to_list_of_substitutions(x)))
+            sy = float(perform_substitutions(context, normalize_to_list_of_substitutions(y)))
+            syaw = float(perform_substitutions(context, normalize_to_list_of_substitutions(yaw)))
+            # x, y, z, roll, pitch, yaw, then velocities and accelerations (all 0)
+            ekf_params.append({'initial_state': [sx, sy, 0.0, 0.0, 0.0, syaw] + [0.0] * 9})
+        return [Node(
+            package='robot_localization',
+            executable='ekf_node',
+            namespace=namespace,
+            name='robot_localization',
+            output='screen',
+            parameters=ekf_params,
+            remappings=[
+                ('/tf', 'tf'),
+                ('/tf_static', 'tf_static'),
+                ('odometry/filtered', 'odom'),
+            ],
+            condition=robot_enabled,
+        )]
+
+    # Start the EKF after the robot has spawned. Gazebo's OdometryPublisher
+    # measures its first velocities from the world origin, so the first couple
+    # of odometry messages after spawning away from (0, 0, 0) carry huge
+    # velocity spikes (hundreds of m/s). An EKF already running integrates
+    # them and ends up metres away from the robot's real pose.
+    ld.add_action(TimerAction(
+        period=spawn_delay + 2.0,
+        actions=[OpaqueFunction(function=_make_ekf)],
     ))
 
     robot_spawner = Node(
@@ -234,6 +257,12 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     ld.add_action(use_sim_time_launch_arg)
 
+    # Husky spawn position in the world (m). Default 0,0 as before.
+    ld.add_action(DeclareLaunchArgument('spawn_x', default_value='0.0'))
+    ld.add_action(DeclareLaunchArgument('spawn_y', default_value='0.0'))
+    # Husky heading at spawn (rad, anticlockwise from +x). 3.14159 = turned around.
+    ld.add_action(DeclareLaunchArgument('spawn_yaw', default_value='0.0'))
+
     rviz_launch_arg = DeclareLaunchArgument(
         'rviz',
         default_value='False',
@@ -338,10 +367,12 @@ def generate_launch_description():
         xacro_parts=['urdf_husky', 'husky.urdf.xacro'],
         bridge_config='gazebo_bridge_husky1.yaml',
         localization_config='robot_localization_husky1.yaml',
-        x='0.0',
-        y='0.0',
+        x=LaunchConfiguration('spawn_x'),
+        y=LaunchConfiguration('spawn_y'),
         z='0.4',
+        yaw=LaunchConfiguration('spawn_yaw'),
         spawn_delay=3.0,
+        ekf_start_at_spawn=True,
     )
 
     add_robot(
@@ -399,5 +430,26 @@ def generate_launch_description():
         rviz_config='41068_parrot1.rviz',
         start_delay=13.0,
     )
+
+    # LiDAR obstacle detection, publishes /husky1/obstacle_stop for mission_manager
+    ld.add_action(Node(
+        package='trail_object_detection',
+        executable='ground_filter',
+        name='ground_filter',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+        condition=_if_true('husky'),
+    ))
+
+    # Camera water guard: forwards teleop on /husky1/cmd_vel_teleop to
+    # /husky1/cmd_vel, so teleop works as soon as the sim is up
+    ld.add_action(Node(
+        package='trail_object_detection',
+        executable='water_guard',
+        name='water_guard',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+        condition=_if_true('husky'),
+    ))
 
     return ld
