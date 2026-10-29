@@ -12,11 +12,27 @@
 #include <std_msgs/msg/color_rgba.hpp>
 
 struct JunctionNode
-{
+{   
+    int id;
     double x;
     double y;
     double yaw;
 };
+
+struct TrailWaypoint{
+    double x;
+    double y;
+    double yaw;
+};
+
+struct Trail{
+    int id;
+    int start_junction;
+    int end_junction = -1;
+
+    std::vector<TrailWaypoint> waypoints;
+};
+
 
 class JunctionRecorder : public rclcpp::Node
 {
@@ -62,6 +78,18 @@ private:
     int consecutive_detections_ = 0;
     std::string save_file_;
 
+    std::vector<Trail> trails_; 
+    int next_trail_id_ = 1; //next unused trail id
+    int next_junction_id_ = 1; //next unused junction id
+    int current_trail_index_ = -1;
+    int active_junction_id_ = -1;
+    double waypoint_spacing_ = 1.0; //distance we want to know when to place next waypoint
+    double junction_exit_distance_ = 1.8; //distance from a junction before it can trigger again
+    double last_waypoint_x_ = 0.0; //last recorded waypoint position
+    double last_waypoint_y_ = 0.0; //last recorded waypoint position
+    bool has_last_waypoint_ = false; // if there is a waypoint reference position
+    
+
    
     void mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
     {
@@ -76,6 +104,7 @@ private:
         double y = msg->pose.pose.position.y;
         double yaw = getYaw(msg->pose.pose.orientation);
         int openings = detectOpenings(x, y);
+        checkJunctionExit(x, y);
 
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "Open directions detected: %d", openings);
 
@@ -91,14 +120,15 @@ private:
         }
 
         // Junction must be detected repeatedly.
-        if (consecutive_detections_ >= confirmation_required_)
-        {
-            if (!nodeNearby(x, y))
-            {
-                saveJunctionNode(x,y,yaw);
+        if (consecutive_detections_ >= confirmation_required_){
+
+            if (active_junction_id_ == -1){
+                handleJunction(x, y, yaw);
             }
+
             consecutive_detections_ = 0;
-        }
+            }
+        recordTrailWaypoint(x, y, yaw);
     }
 
    int detectOpenings(double robot_x, double robot_y)
@@ -309,9 +339,163 @@ bool isDirectionOpen(double robot_x, double robot_y, double angle)
 
 
 
+    int findExistingJunction(double x, double y)
+    {
+        for (const auto &node : nodes_)
+        {
+            double dx = x - node.x;
+            double dy = y - node.y;
+
+            double distance = std::sqrt(dx * dx + dy * dy);
+
+            if (distance < minimum_node_distance_)
+            {
+                return node.id;
+            }
+        }
+
+        return -1; //No existing junction nearby
+    }
+
+    const JunctionNode* getJunction(int id)
+    {
+        for (const auto &node : nodes_)
+        {
+            if (node.id == id)
+            {
+                return &node;
+            }
+        }
+
+        return nullptr;
+    }
+
+
+    void startNewTrail(int junction_id)
+    {
+        Trail trail;
+        trail.id = next_trail_id_++;
+        trail.start_junction = junction_id;
+        trails_.push_back(trail);
+
+        current_trail_index_ = static_cast<int>(trails_.size()) - 1;
+
+        // wait until the robot leaves the junction before recording waypoints.
+        has_last_waypoint_ = false;
+
+        RCLCPP_INFO(this->get_logger(), "Started Trail %d at Junction %d", trail.id, junction_id);
+        saveNodes();
+    }
+
+    void finishCurrentTrail(int junction_id)
+    {
+        if (current_trail_index_ == -1)
+        {
+            return;
+        }
+
+        Trail &trail = trails_[current_trail_index_];
+        trail.end_junction = junction_id;
+        RCLCPP_INFO(this->get_logger(), "Finished Trail %d at Junction %d", trail.id, junction_id);
+        current_trail_index_ = -1;
+
+        saveNodes();
+    }
+    void recordTrailWaypoint(double x, double y, double yaw)
+    {
+        if (current_trail_index_ == -1)
+        {
+            return;
+        }
+        
+        if (active_junction_id_ != -1) //junctions are separate from waypoints
+        {
+            return;
+        }
+
+        if (!has_last_waypoint_)
+        {
+            const Trail &trail = trails_[current_trail_index_];
+            const JunctionNode* start = getJunction(trail.start_junction);
+            if (!start)
+            {
+                return;
+            }
+            last_waypoint_x_ = start->x;
+            last_waypoint_y_ = start->y;
+            has_last_waypoint_ = true;
+        }
+
+        double dx = x - last_waypoint_x_;
+        double dy = y - last_waypoint_y_;
+
+        double distance = std::sqrt(dx * dx + dy * dy);
+
+        if (distance >= waypoint_spacing_)
+        {
+            TrailWaypoint waypoint;
+            waypoint.x = x;
+            waypoint.y = y;
+            waypoint.yaw = yaw;
+            trails_[current_trail_index_].waypoints.push_back(waypoint);
+            last_waypoint_x_ = x;
+            last_waypoint_y_ = y;
+
+            RCLCPP_INFO(this->get_logger(), "Trail %d: Waypoint saved at x=%.2f y=%.2f", trails_[current_trail_index_].id, x, y);
+            saveNodes();
+        }
+    }
+
+    void handleJunction(double x, double y, double yaw)
+    {
+        int junction_id = findExistingJunction(x, y);
+
+        if (junction_id == -1)
+        {
+            saveJunctionNode(x, y, yaw);
+            junction_id = nodes_.back().id;
+        }
+        else
+        {
+            RCLCPP_INFO(this->get_logger(), "Revisited Junction %d", junction_id);
+        }
+        if (active_junction_id_ == junction_id) //so not constantly saving junction
+        {
+            return;
+        }
+        //end old trail and start new trail
+        finishCurrentTrail(junction_id);
+        startNewTrail(junction_id);
+        active_junction_id_ = junction_id;
+        saveNodes();
+    }
+
+    void checkJunctionExit(double x, double y)
+    {
+        if (active_junction_id_ == -1){
+            return;
+        }
+        const JunctionNode* junction = getJunction(active_junction_id_);
+
+        if (!junction){
+            return;
+        }
+
+        double dx = x - junction->x;
+        double dy = y - junction->y;
+
+        double distance = std::sqrt(dx * dx + dy * dy);
+
+        if (distance >= junction_exit_distance_){
+
+            active_junction_id_ = -1;
+        }
+    }
+
     void saveJunctionNode(double x, double y, double yaw)
     {
         JunctionNode node;
+        node.id = next_junction_id_++;
         node.x = x;
         node.y = y;
         node.yaw = yaw;
@@ -319,53 +503,73 @@ bool isDirectionOpen(double robot_x, double robot_y, double angle)
 
         RCLCPP_INFO(this->get_logger(),"JUNCTION SAVED"); 
         RCLCPP_INFO(this->get_logger(), "Position: x=%.3f y=%.3f", x, y);
+        RCLCPP_INFO(this->get_logger(), "Junction ID: %d", node.id);
 
         saveNodes();
     }
 
 
-    void saveNodes()
-    {
-        if (nodes_.empty())
-        {
-            return;
-        }
 
-        std::ofstream file(save_file_);
+void saveNodes()
+{
 
-        if (!file.is_open())
-        {
-            RCLCPP_ERROR(this->get_logger(), "Could not open %s", save_file_.c_str());
-            return;
-        }
+    std::ofstream file(save_file_);
 
-        file << "frame_id: husky1_map\n";
-        file << "nodes:\n";
-
-        for (const auto &node : nodes_)
-        {
-
-            file
-                << "    x: "
-                << node.x
-                << "\n";
-
-            file
-                << "    y: "
-                << node.y
-                << "\n";
-
-            file
-                << "    yaw: "
-                << node.yaw
-                << "\n";
-        }
-
-        file.close();
-
-
-        RCLCPP_INFO(this->get_logger(), "Saved %zu junction nodes to %s", nodes_.size(), save_file_.c_str());
+    if (!file.is_open()) {
+        RCLCPP_ERROR(this->get_logger(), "Could not open %s", save_file_.c_str());
+        return;
     }
+
+    file << "frame_id: husky1_map\n";
+    file << "\njunctions:\n";
+
+    for (const auto &node : nodes_)
+    {
+        file << "  - id: " << node.id << "\n";
+        file << "    x: " << node.x << "\n";
+        file << "    y: " << node.y << "\n";
+        file << "    yaw: " << node.yaw << "\n";
+    }
+
+    file << "\ntrails:\n";
+    for (const auto &trail : trails_)
+    {
+        file << "  - id: " << trail.id << "\n";
+
+        file << "    start_junction: " << trail.start_junction << "\n";
+
+        if (trail.end_junction == -1)
+        {
+            file << "    end_junction: null\n";
+        }
+        else
+        {
+            file << "    end_junction: " << trail.end_junction << "\n";
+        }
+
+        if (trail.waypoints.empty())
+        {
+            file << "    waypoints: []\n";
+        }
+        else
+        {
+            file << "    waypoints:\n";
+
+            for (const auto &waypoint : trail.waypoints)
+            {
+                file << "      - x: " << waypoint.x << "\n";
+                file << "        y: " << waypoint.y << "\n";
+                file << "        yaw: " << waypoint.yaw << "\n";
+            }
+        }
+    }
+
+    file.close();
+
+    RCLCPP_INFO( this->get_logger(),"Saved %zu junctions and %zu trails to %s", nodes_.size(), trails_.size(), save_file_.c_str());
+
+    }
+
 
 
     double getYaw(const geometry_msgs::msg::Quaternion &q)

@@ -1,4 +1,7 @@
 build/
 install/
 log/
+__pycache__/
+*.py[cod]
 *:Zone.Identifier
+settings.json
