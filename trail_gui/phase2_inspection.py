@@ -41,7 +41,7 @@ from state import TrailState
 TICK_MS = 25
 POLL_MS = 100              # how often the real robot position / simulation messages are refreshed
 TRAVEL_SPEED = 5           # cm per tick
-OBSTACLE_CLEARANCE = 18    # cm; an edge counts as blocked if an obstacle is this close to it
+OBSTACLE_CLEARANCE = 65    # cm; an edge counts as blocked if a rock is this close to it (Brown_Rock is ~1.3 m wide)
 
 # Real obstacle detector state (mission_status.py) -> banner text/colour and log line.
 OBSTACLE_BANNER = {
@@ -142,7 +142,7 @@ class Phase2Frame(ttk.Frame):
         ttk.Label(right, text="Legend", font=("Arial", 11, "bold")).pack(anchor="w")
         ttk.Label(right, justify="left",
                   text="Black = unvisited route\nGreen = clear / passed\n"
-                       "Red = blocked by obstacle\nRed X = obstacle (also in the sim)\n"
+                       "Red = blocked by obstacle\nRed X = hidden rock (also spawned in the sim)\n"
                        "Dark circle = robot (live from simulation)\n"
                        "Orange circle = inspection playback").pack(anchor="w", pady=(0, 10))
 
