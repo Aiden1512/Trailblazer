@@ -23,7 +23,8 @@ import state as state_module
 from camera_panel import CameraPanel
 from map_canvas import MapCanvas
 from robot_pose import STATE_COLORS
-from state import TrailState
+from state import TrailState, Node
+
 
 TICK_MS = 30                    # GUI refresh, ~33 fps
 TRAIL_STEP_CM = 2.0             # record a trail point each time the robot has moved this far
@@ -42,8 +43,7 @@ WATER_TEXT = {
 
 
 class Phase1Frame(ttk.Frame):
-    def __init__(self, parent, state: TrailState, on_finish_mapping, on_back,
-                 pose_feed=None, on_reset=None, camera_feed=None, status_feed=None):
+    def __init__(self, parent, state: TrailState, on_finish_mapping, on_back, pose_feed=None, on_reset=None, camera_feed=None, status_feed=None):
         super().__init__(parent)
         self.state = state
         self.on_finish_mapping = on_finish_mapping
@@ -60,6 +60,7 @@ class Phase1Frame(ttk.Frame):
         self._last_recorded = None
         self.distance_since_last_node = 0.0
         self._dirty = True                       # trail/nodes need redrawing
+        self._last_graph_version = -1
 
         self._build_layout()
 
@@ -74,12 +75,11 @@ class Phase1Frame(ttk.Frame):
         ttk.Label(left, text="Phase 1 - Teleop Mapping", font=("Arial", 14, "bold")).pack(anchor="w")
         # wraplength keeps this no wider than the map, so it can't squeeze the side panel
         ttk.Label(left, text="15 m x 15 m trail area. Drive the robot in the simulation and the map follows it; "
-                              "click the map, then press SPACE to mark a junction.",
+                              "and automatically records junctions and waypoints",
                   wraplength=760, justify="left").pack(anchor="w", pady=(0, 6))
 
         self.canvas = MapCanvas(left)   # loads the bundled floor texture automatically
         self.canvas.pack()
-        self.canvas.bind("<space>", lambda e: self._drop_junction())
         self.canvas.bind("<Button-1>", lambda e: self.canvas.focus_set())
 
         button_opts = dict(font=("Arial", 11, "bold"), padx=14, pady=6,
@@ -89,8 +89,6 @@ class Phase1Frame(ttk.Frame):
         controls.pack(fill="x", pady=8)
         tk.Button(controls, text="Reset Run", command=self._reset_run,
                   **button_opts).pack(side="left")
-        tk.Button(controls, text="Drop Junction (Space)", command=self._drop_junction,
-                  **button_opts).pack(side="left", padx=6)
         tk.Button(controls, text="Finish Mapping -> Phase 2", command=self._finish_mapping,
                   **button_opts).pack(side="right")
 
@@ -102,7 +100,7 @@ class Phase1Frame(ttk.Frame):
 
         ttk.Label(right, text="Controls", font=("Arial", 11, "bold")).pack(anchor="w")
         ttk.Label(right, justify="left",
-                  text="W - forward\nA - left\nS - backward\nD - right\nSPACE - mark junction").pack(anchor="w", pady=(0, 12))
+                  text="W - forward\nA - left\nS - backward\nD - right\nSPACE - stop").pack(anchor="w", pady=(0, 12))
 
         ttk.Label(right, text="Status", font=("Arial", 11, "bold")).pack(anchor="w")
         self.sim_var = tk.StringVar()
@@ -139,8 +137,9 @@ class Phase1Frame(ttk.Frame):
             self._tick_job = None
 
     def _reset_run(self):
-        if self.on_reset is not None:
-            self.on_reset()                      # e.g. take leftover obstacles out of the simulation
+        if self.pose_feed is not None:
+            self.pose_feed.reset_graph()
+        self._last_graph_version = -1                     # e.g. take leftover obstacles out of the simulation
         self.state.reset()
         self._started = False
         self._last_recorded = None
@@ -178,6 +177,7 @@ class Phase1Frame(ttk.Frame):
         pose = self.pose_feed.get_pose() if self.pose_feed is not None else None
         if pose is not None:
             self._follow(pose[0], pose[1])
+        self._update_graph()
         self._refresh_status()
         self._redraw()
         self._tick_job = self.after(TICK_MS, self._tick)
@@ -186,8 +186,7 @@ class Phase1Frame(ttk.Frame):
         """Update the robot's position from the simulation and record the trail."""
         self.robot_x, self.robot_y = x, y
 
-        if not self._started:                    # first position: this is where the trail starts
-            self.state.add_node(x, y, kind="junction")
+        if not self._started:
             self.state.trail_points.append((x, y))
             self._last_recorded = (x, y)
             self._started = True
@@ -199,16 +198,8 @@ class Phase1Frame(ttk.Frame):
             return                               # not moved (or just sensor jitter)
         self.state.trail_points.append((x, y))
         self._last_recorded = (x, y)
-        self.distance_since_last_node += step
         self._dirty = True
-
-        if self.distance_since_last_node >= MIN_NODE_SPACING:
-            nodes = self.state.nodes
-            if len(nodes) >= 2 and self._bend_degrees(nodes[-2], nodes[-1], (x, y)) > TURN_ANGLE_DEG:
-                nodes[-1].kind = "junction"      # the path turned at the last node
-            self.state.add_node(x, y, kind="waypoint")
-            self.distance_since_last_node = 0.0
-
+        
     @staticmethod
     def _bend_degrees(a, b, c):
         """How sharply the path a -> b -> c turns at b, in degrees (0 = straight on)."""
@@ -217,17 +208,29 @@ class Phase1Frame(ttk.Frame):
         if math.hypot(abx, aby) < 10 or math.hypot(bcx, bcy) < 10:
             return 0.0
         return abs(math.degrees(math.atan2(abx * bcy - aby * bcx, abx * bcx + aby * bcy)))
-
-    def _drop_junction(self):
-        """Mark a junction at the robot's current position."""
-        if not self.running or not self._started:
+    
+    def _update_graph(self):
+        if self.pose_feed is None:
             return
-        last = self.state.nodes[-1]
-        if math.hypot(self.robot_x - last.x, self.robot_y - last.y) < JUNCTION_MERGE_CM:
-            last.kind = "junction"
-        else:
-            self.state.add_node(self.robot_x, self.robot_y, kind="junction")
-            self.distance_since_last_node = 0.0
+
+        version, graph = self.pose_feed.get_graph()
+
+        if graph is None or version == self._last_graph_version:
+            return
+
+        self._last_graph_version = version
+
+        nodes = []
+
+        for junction in graph.get("junctions", []):
+            node = Node(junction["x"] * 100, junction["y"] * 100, kind="junction")
+            node.id = junction["id"]
+            node.order = junction["id"]
+            nodes.append(node)        
+        for trail in graph.get("trails", []):
+            for waypoint in trail.get("waypoints", []):
+                nodes.append(Node( waypoint["x"] * 100, waypoint["y"] * 100, kind="waypoint" ))      
+        self.state.nodes = nodes
         self._dirty = True
 
     # ---------------- drawing / status ----------------

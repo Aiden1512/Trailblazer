@@ -22,6 +22,7 @@ class Node:
     _next_id = 1
 
     def __init__(self, x, y, kind="waypoint"):
+
         self.id = Node._next_id
         Node._next_id += 1
         self.order = self.id           # creation order, shown on the map
