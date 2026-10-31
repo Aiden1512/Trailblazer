@@ -23,6 +23,8 @@ class YOLOObstacleDetector(Node):
 
         self.detection_pub = self.create_publisher(String, '/husky1/obstacle_detections', 10)
 
+        self.front_obstacle_pub = self.create_publisher(String, '/husky1/front_obstacle', 10)
+
         self.annotated_pub = self.create_publisher(Image, '/husky1/yolo_image', 10)
 
         self.get_logger().info('YOLO obstacle detector started')
@@ -36,13 +38,18 @@ class YOLOObstacleDetector(Node):
 
         results = self.model.predict(
             frame,
-            imgsz=416,
+            imgsz=320,
             conf=0.25,
             device='cpu',
             verbose=False
         )
 
         detections = []
+
+        front_obstacle = None
+        best_score = -1
+        image_width = frame.shape[1]
+        centre_x = image_width / 2
 
         for box in results[0].boxes:
 
@@ -52,10 +59,22 @@ class YOLOObstacleDetector(Node):
 
             detections.append(f'{class_name}: {confidence:.2f}')
 
+            # Check whether the obstacle overlaps the centre of the camera image
+            x1, y1, x2, y2 = box.xyxy[0].tolist()
+            if x1 <= centre_x <= x2:
+                box_area = (x2 - x1) * (y2 - y1)
+
+                if box_area > best_score:
+                    best_score = box_area
+                    front_obstacle = class_name
+
         detection_msg = String()
         detection_msg.data = ', '.join(detections) if detections else 'None'
 
         self.detection_pub.publish(detection_msg)
+        front_msg = String()
+        front_msg.data = front_obstacle if front_obstacle else 'None'
+        self.front_obstacle_pub.publish(front_msg)
 
         annotated_frame = results[0].plot()
     

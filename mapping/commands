@@ -10,3 +10,5 @@ python ~/41068_ws/src/Trailblazer/image_detection/yolo_ros_node.py
 
 source yoloe_env/bin/activate
 python ~/yoloe_test/yolo_ros_node.py
+/usr/bin/python3 ~/yoloe_test/yolo_ros_node.py
+/usr/bin/python3 image_detection/yolo_ros_node.py

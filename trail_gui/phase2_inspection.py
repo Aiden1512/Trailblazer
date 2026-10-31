@@ -36,7 +36,7 @@ from tkinter import ttk
 from camera_panel import CameraPanel
 from map_canvas import MapCanvas
 from robot_pose import STATE_COLORS
-from state import TrailState
+from state import TrailState, Edge
 
 TICK_MS = 25
 POLL_MS = 100              # how often the real robot position / simulation messages are refreshed
@@ -77,6 +77,7 @@ class Phase2Frame(ttk.Frame):
         self.edge_index = 0
         self.target = None
         self.backtracking = False
+        self._display_edges = []
 
         self._build_layout()
         self._poll()
@@ -146,6 +147,10 @@ class Phase2Frame(ttk.Frame):
                        "Dark circle = robot (live from simulation)\n"
                        "Orange circle = inspection playback").pack(anchor="w", pady=(0, 10))
 
+
+        self.obstacle_name_var = tk.StringVar(value="Detected obstacle: None")
+        ttk.Label(right, textvariable=self.obstacle_name_var, font=("Arial", 11, "bold"), wraplength=280).pack(anchor="w", pady=(0, 5))
+
         if self.snapshot_feed is not None:
             CameraPanel(right, self.snapshot_feed, title="Obstacle Snapshot",
                         placeholder_text="NO SNAPSHOT YET").pack(anchor="w", pady=(0, 10))
@@ -164,6 +169,10 @@ class Phase2Frame(ttk.Frame):
     # ---------------- called when this tab becomes active after Phase 1 ----------------
     def refresh_from_state(self):
         self.state.build_edges_from_nodes()
+        display_nodes = getattr(self.state, "display_nodes", self.state.nodes)
+
+        self._display_edges = [ Edge(display_nodes[i], display_nodes[i + 1])
+            for i in range(len(display_nodes) - 1)]
         for edge in self.state.edges:
             edge.status = "unvisited"
         self.edge_index = 0
@@ -288,8 +297,10 @@ class Phase2Frame(ttk.Frame):
 
     # ---------------- drawing / logging ----------------
     def _redraw(self):
-        self.canvas.draw_edges(self.state.edges)
-        self.canvas.draw_nodes(self.state.nodes)
+        for original, display in zip(self.state.edges, self._display_edges):
+            display.status = original.status
+        self.canvas.draw_edges(self._display_edges if self._display_edges else self.state.edges)
+        self.canvas.draw_nodes(getattr(self.state, "display_nodes", self.state.nodes))
         self.canvas.draw_obstacles(self.state.obstacles)
         if self.mission_visible:
             self.canvas.draw_robot(self.mission_x, self.mission_y, tag="mission", color="#ff9800")
@@ -345,6 +356,9 @@ class Phase2Frame(ttk.Frame):
             if frame_id != self._last_snapshot_id:
                 self._log("Obstacle snapshot captured from the robot's camera.")
                 self._last_snapshot_id = frame_id
+                if self.status_feed is not None:
+                    name = self.status_feed.get_front_obstacle()
+                    self.obstacle_name_var.set(f"Detected obstacle: {name}")
 
     def _show_obstacle_level(self, level, detector_text):
         text, color = OBSTACLE_BANNER.get(level, (detector_text, "#757575"))

@@ -1,164 +1,191 @@
 # Trailblazer
 
-## Run the autonomous inspection
+Trailblazer provides a GUI for manually mapping a Husky's trail and then running an autonomous inspection with ROS 2 Humble, Gazebo, Nav2, LiDAR obstacle detection, and YOLO-based obstacle snapshots.
 
-Build the workspace once:
+## Build the workspace
+
+Build once before running:
 
 ```bash
-cd ~/Trailblazer
+cd /Path/to/Trailblazer
 source /opt/ros/humble/setup.bash
 colcon build --symlink-install
-```
-
-## PHASE 1: Manual mapping and object-detection workflow (run in order)
-
-If you are doing the manual map-creation and detection workflow, run the commands below in this order, one command per terminal unless noted otherwise. These are the steps for setting up the simulation, teleoperating the robot, saving a map, and launching the YOLO-based detection node.
-
-1. Set the OpenGL compatibility variables for Gazebo / Ignition rendering:
-
-   ```bash
-   export LIBGL_ALWAYS_SOFTWARE=1
-   export MESA_GL_VERSION_OVERRIDE=3.3
-   ```
-
-   These fix rendering issues on systems without full hardware OpenGL support.
-
-2. Launch the Husky simulation in the trail world without Nav2, and open RViz:
-
-   ```bash
-   ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py slam:=true nav2:=false rviz:=true world:=trail_world
-   ```
-
-   This starts the simulated robot and the local SLAM / visualization stack for manual driving and mapping.
-
-3. Start keyboard teleoperation for the Husky:
-
-   ```bash
-   ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r cmd_vel:=/husky1/cmd_vel
-   ```
-
-   This lets you drive the robot manually through the environment while collecting the map.
-
-4. Start the path recorder to log the robot trajectory:
-
-   ```bash
-   ros2 run husky_mapping path_recorder
-   ```
-
-   This records the path travelled so the map can be reconstructed or saved later.
-
-5. Save the generated map to disk:
-
-   ```bash
-   ros2 run nav2_map_server map_saver_cli -f ~/FILEPATH/FILENAME --ros-args -r map:=/husky1/map
-   ```
-
-   This writes the current occupancy map to a file for later use in autonomous navigation.
-
-6. Start the Husky WASD teleop node:
-
-   ```bash
-   ros2 run husky_mapping husky_wasd_node
-   ```
-
-   This runs a direct keyboard-driving node for the Husky when you want a simple manual drive interface.
-
-7. Run the repository's YOLO ROS detection node:
-
-   ```bash
-   python ~/41068_ws/src/Trailblazer/image_detection/yolo_ros_node.py
-   ```
-
-   This launches the object-detection pipeline using the YOLO model in this project.
-
-8. If using the alternate YOLOE environment, activate it and run the alternate node:
-
-   ```bash
-   source yoloe_env/bin/activate
-   python ~/yoloe_test/yolo_ros_node.py
-   ```
-
-   These commands switch to a separate YOLOE environment for the alternate detection script.
-
-
-## PHASE 2: Autonomous inspection phase
-Start each command below in a **separate terminal**. In each terminal, first run:
-
-```bash
-source /opt/ros/humble/setup.bash
-cd ~/Trailblazer
 source install/setup.bash
 ```
 
-1. Start the Husky simulation, SLAM, Nav2, and RViz:
+In **each new ROS terminal**, run:
 
-   There may be an issue on the first run of opening the simulation, to fix run these two: 
+```bash
+source /opt/ros/humble/setup.bash
+cd /Path/to/Trailblazer
+source install/setup.bash
+```
 
-    ```bash
-    export MESA_GL_VERSION_OVERRIDE=3.3
-    export LIBGL_ALWAYS_SOFTWARE=1
-    ```
+## Phase 1: Manual mapping using the GUI
 
-   To start the simulation with no obstacles:
+Run the following in order, using separate terminals for processes that must remain running.
 
-   ```bash
-   ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py slam:=true nav2:=true rviz:=true world:=trail_world
-   ```
-   or for obstacle world: 
+### 1. Launch the Husky simulation
 
-    ```bash
-   ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py slam:=true nav2:=true rviz:=true world:=obstacle_world spawn_x:=6.5 spawn_y:=4 spawn_yaw:=3.14159
-   ```
-2. Start the GUI:
+If Gazebo has OpenGL rendering issues, run these commands in the simulation terminal first:
 
-   ```bash
-   ros2 run trailblazer_gui main.py
-   ```
+```bash
+export LIBGL_ALWAYS_SOFTWARE=1
+export MESA_GL_VERSION_OVERRIDE=3.3
+```
 
-3. Start LiDAR obstacle detection:
+Launch the **trail world** with SLAM, Nav2, and RViz:
 
-   ```bash
-   ros2 run trail_object_detection ground_filter
-   ```
+```bash
+ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py slam:=true nav2:=true rviz:=true world:=trail_world spawn_x:=6.5 spawn_y:=4 spawn_yaw:=3.14159
+```
 
-   The camera water guard (stops Phase 1 teleop driving into the blue pond) is
-   started by the launch file. To run it on its own instead:
+### 2. Launch the Trailblazer GUI
 
-   ```bash
-   ros2 run trail_object_detection water_guard
-   ```
+In a separate terminal:
 
-   For Phase 1, drive with teleop publishing to `/husky1/cmd_vel_teleop` (not
-   `/husky1/cmd_vel`) so its commands pass through the guard:
+```bash
+ros2 run trailblazer_gui main.py
+```
 
-   ```bash
-   ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r cmd_vel:=/husky1/cmd_vel_teleop
-   ```
-   or
-   ```bash
-   ros2 run husky_mapping husky_wasd_node --ros-args -r /husky1/cmd_vel:=/husky1/cmd_vel_teleop
-   ```
+Select **Start a New Simulation** to open Phase 1.
 
-   The guard slows forward driving when blue ground is within 1.8 m ahead and
-   blocks it inside 0.9 m; reversing and turning always work. It also blocks
-   forward driving if no camera frames arrive. Phase 2 (Nav2) publishes to
-   `/husky1/cmd_vel` directly and isn't affected. To see what it detects, view
-   `/husky1/water_debug` in RViz or `rqt_image_view` (water in the robot's path
-   is painted red).
+### 3. Start the path recorder
 
-4. Start the mission manager:
+In another terminal:
 
-   ```bash
-   ros2 run trail_decision_making mission_manager_node --ros-args -r __ns:=/husky1 --params-file ~/Trailblazer/trail_decision_making/config/mission_manager.yaml -r /tf:=/husky1/tf -r /tf_static:=/husky1/tf_static
-   ```
+```bash
+ros2 run husky_mapping path_recorder
+```
 
-5. To override the GUI button and automatically start the mission:
 
-   ```bash
-   ros2 service call /husky1/start_mission std_srvs/srv/Trigger
-   ```
+### 4. Press Start Recording in the GUI
 
-In the GUI, map a trail in **Phase 1** or continue with a saved map, then go to
-**Phase 2 - Autonomous Inspection**. Press **Start Autonomous Inspection** to
-start the inspection; the button sends the start request to the mission manager.
-Wait for the simulation, Nav2, and localisation to be ready before starting.
+Click **Start Recording** before mapping the trail.
+
+- The button changes to **Recording in Progress** and becomes disabled.
+- The GUI begins drawing and storing the yellow travelled trail.
+- The junction recorder begins recording junctions and waypoints.
+- Movement before pressing **Start Recording** is not included in the GUI recording.
+
+### 5. Teleoperate using the GUI
+
+Click the GUI map to give it keyboard focus, then use:
+
+| Key | Action |
+| --- | --- |
+| **W** | Forward |
+| **S** | Backward |
+| **A** | Rotate left |
+| **D** | Rotate right |
+| **Space** | Stop |
+
+**Releasing a movement key does not stop the robot.** Press **Space** or another movement key to change its command.
+
+The yellow trail and recorded junctions/waypoints will appear on the GUI as the robot moves.
+
+> **Water guard note:** The GUI sends teleop commands to `/husky1/cmd_vel_teleop`
+
+### 6. Reset if you need to start over
+
+Click **Reset Run** to:
+
+- Clear the GUI trail, junctions, and waypoints.
+- Request a reset of the junction recorder graph.
+- Re-enable **Start Recording**.
+
+Press **Start Recording** again before remapping.
+=
+
+### 8. Finish mapping
+
+Press **Space** to stop the robot, then click **Finish Mapping → Phase 2**.
+
+The GUI's finish workflow saves its trail/node data to `saved_map.json` for **Continue Where You Left Off**. 
+
+## Phase 2: Autonomous inspection and obstacle detection
+
+Use a separate terminal for each process and source ROS and the workspace as described above.
+
+### 1. Launch or keep running the simulation
+
+If continuing directly from Phase 1, **do not launch a second simulation**.
+
+For a fresh simulation in the trail world:
+
+```bash
+ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py slam:=true nav2:=true rviz:=true world:=trail_world
+```
+
+Alternatively, for the obstacle world:
+
+```bash
+ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py slam:=true nav2:=true rviz:=true world:=obstacle_world spawn_x:=6.5 spawn_y:=4 spawn_yaw:=3.14159
+```
+
+### 2. Launch or keep running the GUI
+
+If it is not already running:
+
+```bash
+ros2 run trailblazer_gui main.py
+```
+
+Choose **Continue Where You Left Off** to load a previously saved trail, or move into Phase 2 directly from Phase 1.
+
+### 3. Start YOLO for obstacle classification and snapshots
+
+YOLO must run for the annotated obstacle snapshot and selected obstacle class to be available.
+
+From the repository directory:
+
+```bash
+/usr/bin/python3 image_detection/yolo_ros_node.py
+```
+
+If `python3` already resolves to the correct Linux Python environment, you can use:
+
+```bash
+python3 image_detection/yolo_ros_node.py
+```
+
+The environment needs `ultralytics`, `cv2`, ROS 2 Python packages, and `cv_bridge`.
+
+The YOLO node subscribes to `/husky1/camera/image` and publishes annotated frames to `/husky1/yolo_image`. With the obstacle-name changes in place, it also publishes the selected class to `/husky1/front_obstacle`.
+
+### 4. Start LiDAR obstacle detection
+
+```bash
+ros2 run trail_object_detection ground_filter
+```
+
+The detector publishes:
+
+- `/husky1/obstacle_detected`: obstacle warning.
+- `/husky1/obstacle_stop`: obstacle within the stop range.
+- `/husky1/obstacle_image`: a captured YOLO-annotated snapshot when a new stop event activates.
+
+The Phase 2 GUI shows the snapshot and the detected obstacle name. The label should update only when a new snapshot is received.
+
+### 5. Start the mission manager
+
+```bash
+ros2 run trail_decision_making mission_manager_node --ros-args -r __ns:=/husky1 --params-file ~/Trailblazer/trail_decision_making/config/mission_manager.yaml -r /tf:=/husky1/tf -r /tf_static:=/husky1/tf_static
+```
+
+The mission manager waits for the GUI to start the autonomous inspection.
+
+### 6. Start autonomous inspection in the GUI
+
+Wait for the simulation, Nav2, and localisation to be ready. In Phase 2, click **Start Autonomous Inspection**.
+
+This calls `/husky1/start_mission`. The GUI then shows mission progress, obstacle warnings, captured snapshots, and inspection messages.
+
+### Optional: Trigger the mission manually
+
+To bypass the GUI button:
+
+```bash
+ros2 service call /husky1/start_mission std_srvs/srv/Trigger
+```
+

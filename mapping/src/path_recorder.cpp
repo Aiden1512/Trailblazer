@@ -72,6 +72,7 @@ public:
                     has_last_waypoint_ = false;
                     last_waypoint_x_ = 0.0;
                     last_waypoint_y_ = 0.0;
+                    recording_enabled_ = false;
 
                     // Save empty graph and publish to GUI
                     saveNodes();
@@ -80,9 +81,15 @@ public:
 
                     response->success = true;
                     response->message = "Trail graph reset";
-                }
-);
-        RCLCPP_INFO(this->get_logger(), "Junction recorder started.");
+                });
+        start_service_ = this->create_service<std_srvs::srv::Trigger>("/husky1/start_trail_recording",
+        [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>, std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+        {
+            recording_enabled_ = true;
+            response->success = true;
+            response->message = "Recording started";
+            RCLCPP_INFO(this->get_logger(), "Recording started");
+        });
     }
 
     ~JunctionRecorder()
@@ -98,6 +105,7 @@ private:
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr ray_marker_pub_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr graph_pub_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_service_;
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_service_;
     nav_msgs::msg::OccupancyGrid::SharedPtr latest_map_;
     std::vector<JunctionNode> nodes_;
 
@@ -121,6 +129,8 @@ private:
     double last_waypoint_x_ = 0.0; //last recorded waypoint position
     double last_waypoint_y_ = 0.0; //last recorded waypoint position
     bool has_last_waypoint_ = false; // if there is a waypoint reference position
+    bool recording_enabled_ = false;
+    
     
 
    
@@ -130,12 +140,32 @@ private:
     }
 
     void poseCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg)
-    {
+    {   if (!recording_enabled_) {return;}
         if (!latest_map_){return;}
 
         double x = msg->pose.pose.position.x;
         double y = msg->pose.pose.position.y;
         double yaw = getYaw(msg->pose.pose.orientation);
+
+        if (trails_.empty())
+        {
+            Trail trail;
+            trail.id = next_trail_id_++;
+            trail.start_junction = -1;  // No junction at the starting position
+            trails_.push_back(trail);
+
+            current_trail_index_ = 0;
+
+            last_waypoint_x_ = x;
+            last_waypoint_y_ = y;
+            has_last_waypoint_ = true;
+
+            trails_[0].waypoints.push_back({x, y, yaw});
+
+            saveNodes();
+        }
+
+
         int openings = detectOpenings(x, y);
         checkJunctionExit(x, y);
 
@@ -449,13 +479,25 @@ bool isDirectionOpen(double robot_x, double robot_y, double angle)
         if (!has_last_waypoint_)
         {
             const Trail &trail = trails_[current_trail_index_];
-            const JunctionNode* start = getJunction(trail.start_junction);
-            if (!start)
+
+            if (trail.start_junction != -1)
             {
-                return;
+                const JunctionNode* start = getJunction(trail.start_junction);
+
+                if (start){
+                    last_waypoint_x_ = start->x;
+                    last_waypoint_y_ = start->y;
+                }
+                else{
+                    last_waypoint_x_ = x;
+                    last_waypoint_y_ = y;
+                }
             }
-            last_waypoint_x_ = start->x;
-            last_waypoint_y_ = start->y;
+            else{
+                last_waypoint_x_ = x;
+                last_waypoint_y_ = y;
+            }
+
             has_last_waypoint_ = true;
         }
 

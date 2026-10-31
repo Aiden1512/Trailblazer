@@ -42,7 +42,7 @@ GroundFilter::GroundFilter() : Node("ground_filter")
       "/husky1/scan/points", 10,
       [this](sensor_msgs::msg::PointCloud2::SharedPtr msg) { callback(msg); });
   camera_sub_ = create_subscription<sensor_msgs::msg::Image>(
-      "/husky1/camera/image", rclcpp::SensorDataQoS(),
+      "/husky1/yolo_image", rclcpp::SensorDataQoS(),
       [this](sensor_msgs::msg::Image::ConstSharedPtr msg) {
         if (!awaiting_obstacle_image_)
         {

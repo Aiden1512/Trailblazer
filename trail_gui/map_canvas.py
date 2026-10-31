@@ -43,6 +43,7 @@ class MapCanvas(tk.Canvas):
     def __init__(self, parent, world_size_cm=MAP_SIZE_CM, display_px=CANVAS_PX, **kwargs):
         super().__init__(parent, width=display_px, height=display_px, bg=MAP_BG,
                           highlightthickness=1, highlightbackground="#9fae95", **kwargs)
+        self.configure(takefocus=1)
         self.world_size = world_size_cm
         self.display_px = display_px
         self.scale = display_px / world_size_cm

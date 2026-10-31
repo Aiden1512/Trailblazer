@@ -39,6 +39,7 @@ MISSION_TOPIC = "/husky1/mission_status"
 START_SERVICE = "/husky1/start_mission"
 WATER_WARN_TOPIC = "/husky1/water_detected"
 WATER_STOP_TOPIC = "/husky1/water_stop"
+FRONT_OBSTACLE_TOPIC = "/husky1/front_obstacle"
 STALE_AFTER_S = 2.0                       # the detector publishes every lidar frame (~10 Hz)
 WATER_STALE_AFTER_S = 3.0                 # water_guard publishes every camera frame (~3 Hz)
 
@@ -55,6 +56,8 @@ class MissionStatusFeed:
         self._water_warn = False
         self._water_stop = False
         self._last_water_time = None
+        self._front_obstacle = "None"
+        self._last_front_obstacle_time = None
         self._startup_error = ""
         self._start_client = None
         self.start_results = queue.Queue()
@@ -82,6 +85,7 @@ class MissionStatusFeed:
             self._node.create_subscription(Bool, STOP_TOPIC, self._on_stop, 10)
             self._node.create_subscription(Bool, WATER_WARN_TOPIC, self._on_water_warn, 10)
             self._node.create_subscription(Bool, WATER_STOP_TOPIC, self._on_water_stop, 10)
+            self._node.create_subscription(String, FRONT_OBSTACLE_TOPIC, self._on_front_obstacle, 10)
             # mission_manager latches its last status, so we get it even if it was sent before we started.
             latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                  durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -152,6 +156,11 @@ class MissionStatusFeed:
         with self._lock:
             self._mission_text = msg.data
 
+    def _on_front_obstacle(self, msg):
+        with self._lock:
+            self._front_obstacle = msg.data
+            self._last_front_obstacle_time = time.monotonic()
+
     def _on_start_reply(self, future):
         try:
             reply = future.result()
@@ -194,6 +203,16 @@ class MissionStatusFeed:
         if last is None or time.monotonic() - last > WATER_STALE_AFTER_S:
             return None
         return "stop" if stop else "warn" if warn else "clear"
+    
+    def get_front_obstacle(self):
+        with self._lock:
+            name = self._front_obstacle
+            last = self._last_front_obstacle_time
+
+        if last is None or time.monotonic() - last > 2.0:
+            return "Unknown"
+
+        return name if name != "None" else "Unknown"
 
     def status(self):
         """Return (state, text) for the detector connection; state is one of

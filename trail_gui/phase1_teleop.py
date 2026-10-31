@@ -54,6 +54,7 @@ class Phase1Frame(ttk.Frame):
         self.status_feed = status_feed
 
         self.running = False
+        self.recording = False
         self._tick_job = None
         self.robot_x = self.robot_y = None       # None until the sim reports a position
         self._started = False                    # True once the start node has been dropped
@@ -61,6 +62,8 @@ class Phase1Frame(ttk.Frame):
         self.distance_since_last_node = 0.0
         self._dirty = True                       # trail/nodes need redrawing
         self._last_graph_version = -1
+        self._display_nodes = []
+        self._display_cache = {}
 
         self._build_layout()
 
@@ -81,14 +84,18 @@ class Phase1Frame(ttk.Frame):
         self.canvas = MapCanvas(left)   # loads the bundled floor texture automatically
         self.canvas.pack()
         self.canvas.bind("<Button-1>", lambda e: self.canvas.focus_set())
+        self.canvas.bind("<KeyPress>", self._on_key_press)
 
-        button_opts = dict(font=("Arial", 11, "bold"), padx=14, pady=6,
-                           relief="raised", bd=2, cursor="hand2")
-
+        button_opts = dict(font=("Arial", 11, "bold"), padx=14, pady=6, relief="raised", bd=2, cursor="hand2")
         controls = ttk.Frame(left)
         controls.pack(fill="x", pady=8)
         tk.Button(controls, text="Reset Run", command=self._reset_run,
                   **button_opts).pack(side="left")
+        
+        self.record_button = tk.Button(controls, text="Start Recording", command=self._start_recording, **button_opts)
+        self.record_button.pack(side="left", padx=8)
+
+
         tk.Button(controls, text="Finish Mapping -> Phase 2", command=self._finish_mapping,
                   **button_opts).pack(side="right")
 
@@ -135,13 +142,18 @@ class Phase1Frame(ttk.Frame):
         if self._tick_job is not None:
             self.after_cancel(self._tick_job)
             self._tick_job = None
+        if self.pose_feed is not None:
+            self.pose_feed.send_velocity()
 
     def _reset_run(self):
         if self.pose_feed is not None:
             self.pose_feed.reset_graph()
         self._last_graph_version = -1                     # e.g. take leftover obstacles out of the simulation
         self.state.reset()
+        self.recording = False
+        self.record_button.config(text="Start Recording", state="normal")
         self._started = False
+        self._display_cache.clear()
         self._last_recorded = None
         self.distance_since_last_node = 0.0
         self._dirty = True
@@ -153,6 +165,16 @@ class Phase1Frame(ttk.Frame):
         if self._tick_job is not None:
             self.after_cancel(self._tick_job)
         self._tick_job = self.after(TICK_MS, self._tick)
+
+    def _start_recording(self):
+        if self.pose_feed is None or not self.pose_feed.start_recording():
+            messagebox.showwarning("Recording unavailable", "Could not contact the junction recorder.")
+            return
+        self.recording = True
+        self.record_button.config(
+            text="Recording in Progress",
+            state="disabled"
+        )
 
     def _finish_mapping(self):
         if len(self.state.nodes) < 2:
@@ -185,6 +207,8 @@ class Phase1Frame(ttk.Frame):
     def _follow(self, x, y):
         """Update the robot's position from the simulation and record the trail."""
         self.robot_x, self.robot_y = x, y
+        if not self.recording:
+            return
 
         if not self._started:
             self.state.trail_points.append((x, y))
@@ -218,26 +242,52 @@ class Phase1Frame(ttk.Frame):
         if graph is None or version == self._last_graph_version:
             return
 
-        self._last_graph_version = version
-
         nodes = []
+        display_nodes = []
+        
 
         for junction in graph.get("junctions", []):
             node = Node(junction["x"] * 100, junction["y"] * 100, kind="junction")
             node.id = junction["id"]
             node.order = junction["id"]
-            nodes.append(node)        
+            nodes.append(node)
+
+            key = ("junction", junction["id"])
+            if key not in self._display_cache:
+                pos = self.pose_feed.map_to_display(junction["x"], junction["y"])
+                if pos is None:
+                    return
+                self._display_cache[key] = pos
+            pos = self._display_cache[key]   
+            display_node = Node(pos[0] * 100, pos[1] * 100, kind="junction")
+            display_node.id = junction["id"]
+            display_node.order = junction["id"]
+            display_nodes.append(display_node)
+
+
         for trail in graph.get("trails", []):
-            for waypoint in trail.get("waypoints", []):
-                nodes.append(Node( waypoint["x"] * 100, waypoint["y"] * 100, kind="waypoint" ))      
+            for index, waypoint in enumerate(trail.get("waypoints", [])):
+                nodes.append(Node( waypoint["x"] * 100, waypoint["y"] * 100, kind="waypoint" ))
+                key = ("waypoint", trail["id"], index)
+                if key not in self._display_cache:
+                    pos = self.pose_feed.map_to_display(waypoint["x"], waypoint["y"])
+                    if pos is None:
+                        return
+                    self._display_cache[key] = pos
+                pos = self._display_cache[key] 
+                display_nodes.append(Node(pos[0] * 100, pos[1] * 100, kind="waypoint"))      
+        
         self.state.nodes = nodes
+        self._display_nodes = display_nodes
+        self.state.display_nodes = display_nodes
+        self._last_graph_version = version
         self._dirty = True
 
     # ---------------- drawing / status ----------------
     def _redraw(self):
         if self._dirty:
             self.canvas.draw_trail(self.state.trail_points)
-            self.canvas.draw_nodes(self.state.nodes)
+            self.canvas.draw_nodes(self._display_nodes)
             self._dirty = False
         if self.robot_x is not None:
             self.canvas.draw_robot(self.robot_x, self.robot_y)
@@ -256,3 +306,25 @@ class Phase1Frame(ttk.Frame):
             text, colour = WATER_TEXT[self.status_feed.get_water()]
             self.water_var.set(text)
             self.water_label.configure(foreground=colour)
+
+    # ---------------- teleop ----------------
+    def _on_key_press(self, event):
+        if self.pose_feed is None:
+            return
+
+        key = event.keysym.lower()
+
+        if key == "w":
+            self.pose_feed.send_velocity(linear=0.5)
+        elif key == "s":
+            self.pose_feed.send_velocity(linear=-0.5)
+        elif key == "a":
+            self.pose_feed.send_velocity(angular=0.8)
+        elif key == "d":
+            self.pose_feed.send_velocity(angular=-0.8)
+        elif key == "space":
+            self.pose_feed.send_velocity()
+        else:
+            return
+
+        return "break"

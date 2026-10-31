@@ -74,6 +74,7 @@ class TrailState:
     def reset(self):
         self.trail_points = []   # fine-grained (x, y) samples of the travelled path
         self.nodes = []          # list[Node], in creation order
+        self.display_nodes = []  # list[Node], in creation order, adjusted for GUI display
         self.edges = []          # list[Edge], consecutive-node segments
         self.obstacles = []      # list[(x, y)] placed for the Phase 2 simulation
         Node._next_id = 1
@@ -104,6 +105,7 @@ class TrailState:
             "units": "cm",
             "frame": "origin at map centre, +x right, +y up",
             "nodes": [{"x": round(n.x, 1), "y": round(n.y, 1), "kind": n.kind} for n in self.nodes],
+            "display_nodes": [{"x": n.x, "y": n.y, "kind": n.kind, "id": n.id, "order": n.order} for n in self.display_nodes],
         }
 
     def load_dict(self, data):
@@ -118,6 +120,17 @@ class TrailState:
         self.reset()
         for x, y, kind in nodes:
             self.add_node(x, y, kind=kind)
+        saved_display_nodes = data.get("display_nodes", [])
+        if len(saved_display_nodes) == len(self.nodes):
+            self.display_nodes = []
+
+            for item in saved_display_nodes:
+                node = Node(float(item["x"]), float(item["y"]), kind=item["kind"])
+                node.id = item.get("id", node.id)
+                node.order = item.get("order", node.order)
+                self.display_nodes.append(node)
+        else:
+            self.display_nodes = self.nodes
 
 
 def save_map(state, path=None):
