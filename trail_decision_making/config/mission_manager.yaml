@@ -1,7 +1,7 @@
 /husky1/mission_manager:
   ros__parameters:
     use_sim_time: true
-    waypoints_file: "/home/stella/Trailblazer/trail_decision_making/config/recorded_trail_paths.yaml"
+    waypoints_file: "/home/aiden/Trailblazer/trail_decision_making/config/recorded_trail_paths.yaml"
     global_frame: "husky1_map"
     robot_frame: "husky1_base_link"
     nav_action_name: "navigate_to_pose"

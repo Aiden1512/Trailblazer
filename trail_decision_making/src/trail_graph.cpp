@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <utility>
 
+#include <unordered_map>
+
 namespace trail_decision_making
 {
 
@@ -31,52 +33,100 @@ namespace trail_decision_making
         }
     // } // namespace
 
-    // Load the YAML file produced by the mapping team. Returns false on failure.
-    bool TrailGraph::loadFromYaml(const std::string &file_path)
-    {
-        nodes_.clear();
-        edges_.clear(); 
+    // Load the YAML file produced by the mapping team. Returns false on failure. Aiden tweaked this function
 
-        try
+bool TrailGraph::loadFromYaml(const std::string &file_path)
+{
+    nodes_.clear();
+    edges_.clear();
+
+    try
+    {
+        const YAML::Node root = YAML::LoadFile(file_path);
+        const YAML::Node junctions = root["junctions"];
+        const YAML::Node trails = root["trails"];
+
+        if (!junctions || !junctions.IsSequence() ||
+            !trails || !trails.IsSequence())
         {
-            const YAML::Node root = YAML::LoadFile(file_path);
-            const YAML::Node trails = root["trails"];
-            if (!trails || !trails.IsSequence())
+            return false;
+        }
+
+        // Match YAML junction IDs to internal node IDs.
+        std::unordered_map<int, int> junction_id_to_node;
+
+        for (const auto &junction : junctions)
+        {
+            const int yaml_id = junction["id"].as<int>();
+
+            TrailNode node;
+            node.id = static_cast<int>(nodes_.size());
+            node.position = {
+                junction["x"].as<double>(),
+                junction["y"].as<double>(),
+                junction["yaw"].as<double>(0.0)
+            };
+
+            junction_id_to_node[yaml_id] = node.id;
+            nodes_.push_back(node);
+        }
+
+        // Build edges using the explicitly defined junctions.
+        for (const auto &trail : trails)
+        {
+            const YAML::Node wps = trail["waypoints"];
+
+            // Ignore Trail 7 (the endpoint marker).
+            if (!wps || !wps.IsSequence() || wps.size() < 2)
+            {
+                continue;
+            }
+
+            const YAML::Node start = trail["start_junction"];
+            const YAML::Node end = trail["end_junction"];
+
+            if (!start || !end || start.IsNull() || end.IsNull())
+            {
+                continue;
+            }
+
+            const int start_id = start.as<int>();
+            const int end_id = end.as<int>();
+
+            if (junction_id_to_node.count(start_id) == 0 ||
+                junction_id_to_node.count(end_id) == 0)
             {
                 return false;
             }
 
-            for (const auto &trail : trails)
+            TrailEdge edge;
+            edge.id = static_cast<int>(edges_.size());
+            edge.from_node = junction_id_to_node.at(start_id);
+            edge.to_node = junction_id_to_node.at(end_id);
+            edge.trail_name = trail["name"]
+                ? trail["name"].as<std::string>()
+                : "";
+
+            for (const auto &wp : wps)
             {
-                const YAML::Node wps = trail["waypoints"];
-                if (!wps || !wps.IsSequence() || wps.size() < 2) // need at least two waypoints to form an edge
-                {
-                    continue;
-                }
-
-                TrailEdge edge;
-                edge.trail_name = trail["name"] ? trail["name"].as<std::string>() : ""; 
-
-                for (const auto &wp : wps) 
-                {
-                    edge.waypoints.push_back(
-                        {wp["x"].as<double>(), wp["y"].as<double>(), wp["yaw"].as<double>(0.0)}); // default yaw to 0.0 if not provided
-                }
-                // Create nodes for the first and last waypoints of the edge, reusing existing nodes if they are within the merge tolerance
-                const Waypoint &first = edge.waypoints.front();
-                const Waypoint &last = edge.waypoints.back();
-                edge.from_node = getOrCreateNode(first.x, first.y, first.yaw);
-                edge.to_node = getOrCreateNode(last.x, last.y, last.yaw);
-                edge.id = static_cast<int>(edges_.size());
-                edges_.push_back(std::move(edge));
+                edge.waypoints.push_back({
+                    wp["x"].as<double>(),
+                    wp["y"].as<double>(),
+                    wp["yaw"].as<double>(0.0)
+                });
             }
+
+            edges_.push_back(std::move(edge));
         }
-        catch (const YAML::Exception &)
-        {
-            return false; 
-        }
-        return !edges_.empty(); // maybe return the edges instead of returning true/false, so the caller can check if the graph is empty
     }
+    catch (const YAML::Exception &)
+    {
+        return false;
+    }
+
+    return !edges_.empty();
+}
+
 
     // Get a pointer to the edge with the given id, or nullptr if the id does not exist.
     const TrailEdge *TrailGraph::getEdge(int edge_id) const

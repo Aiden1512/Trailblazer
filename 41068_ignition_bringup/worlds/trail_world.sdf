@@ -190,6 +190,14 @@
       <pose>6 -6 0 0 0 0</pose>
     </include>
 
+
+//Obstacles
+    <include>
+      <uri>model://Brown_Rock</uri>
+      <name>Brown_Rock</name>
+      <pose>3 6 0 0 0 0</pose>
+    </include>
+
   </world>
 
 </sdf>

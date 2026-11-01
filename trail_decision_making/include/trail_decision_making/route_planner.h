@@ -19,6 +19,9 @@ namespace trail_decision_making
         // BLOCKED edges are never used. Empty vector => nothing left to inspect.
         std::vector<int> planToNextUninspected(int start_node) const;
 
+        // Aiden edit: Find a route between two junctions without using blocked trails.
+        std::vector<int> planToNode(int start_node, int target_node) const;
+        
         // Node reached after traversing edge_id starting from node_id
         int otherEnd(int edge_id, int node_id) const;
 

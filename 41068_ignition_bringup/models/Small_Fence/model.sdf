@@ -14,7 +14,7 @@
         <geometry>
           <mesh>
             <uri>model://Small_Fence/Mesh/Small_Fence.obj</uri>
-            <scale>0.5 0.5 0.5</scale>
+            <scale>2 2 2</scale>
           </mesh>
         </geometry>
       </visual>
@@ -23,7 +23,7 @@
         <geometry>
           <mesh>
             <uri>model://Small_Fence/Mesh/Small_Fence.obj</uri>
-            <scale>0.5 0.5 0.5</scale>
+            <scale>2.25 2.25 2.25</scale>
           </mesh>
         </geometry>
       </collision>

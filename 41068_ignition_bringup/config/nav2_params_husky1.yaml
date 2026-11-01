@@ -181,7 +181,7 @@ local_costmap:
         # overhanging branches. The flattened scan is used only to clear cells.
         observation_sources: points scan
         points:
-          topic: scan/points
+          topic: /husky1/scan/points
           data_type: PointCloud2
           marking: true
           clearing: false
@@ -190,7 +190,7 @@ local_costmap:
           obstacle_max_range: 10.0
           obstacle_min_range: 0.0
         scan:
-          topic: scan
+          topic: /husky1/scan
           data_type: LaserScan
           marking: false
           clearing: true
@@ -212,8 +212,13 @@ global_costmap:
       footprint: '[ [0.5, 0.35], [0.5, -0.35], [-0.5, -0.35], [-0.5, 0.35] ]'
       resolution: 0.1
       track_unknown_space: true
+      rolling_window: false
+      width: 30
+      height: 30
+      origin_x: -15.0
+      origin_y: -15.0
+
       plugins:
-      - static_layer
       - obstacle_layer
       - inflation_layer
       obstacle_layer:
@@ -253,7 +258,7 @@ global_costmap:
 map_server:
   ros__parameters:
     use_sim_time: true
-    yaml_filename: "/home/stella/Trailblazer/41068_ignition_bringup/maps/customEnvMap.yaml"
+    yaml_filename: "/home/Trailblazer/41068_ignition_bringup/maps/customEnvMap.yaml"
 map_saver:
   ros__parameters:
     use_sim_time: true

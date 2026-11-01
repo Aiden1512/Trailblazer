@@ -67,4 +67,67 @@ namespace trail_decision_making
         return {}; // no uninspected edges reachable
     }
 
+    // Aiden edit: Find the shortest route in number of edges
+    // between two junctions, excluding blocked trails.
+    std::vector<int> RoutePlanner::planToNode(
+        int start_node,
+        int target_node) const
+    {
+        if (start_node == target_node)
+        {
+            return {};
+        }
+
+        std::queue<int> frontier;
+        std::unordered_map<int, std::pair<int, int>> parent;
+
+        frontier.push(start_node);
+        parent[start_node] = {-1, -1};
+
+        while (!frontier.empty())
+        {
+            const int node = frontier.front();
+            frontier.pop();
+
+            for (int edge_id : graph_.getConnectedEdges(node))
+            {
+                const TrailEdge *edge = graph_.getEdge(edge_id);
+
+                if (!edge || edge->status == EdgeStatus::BLOCKED)
+                {
+                    continue;
+                }
+
+                const int next_node = otherEnd(edge_id, node);
+
+                if (next_node < 0 || parent.find(next_node) != parent.end())
+                {
+                    continue;
+                }
+
+                parent[next_node] = {node, edge_id};
+
+                if (next_node == target_node)
+                {
+                    std::vector<int> path;
+
+                    for (int current = target_node;
+                        current != start_node;
+                        current = parent[current].first)
+                    {
+                        path.push_back(parent[current].second);
+                    }
+
+                    std::reverse(path.begin(), path.end());
+
+                    return path;
+                }
+
+                frontier.push(next_node);
+            }
+        }
+
+        // No route exists without crossing a blocked trail.
+        return {};
+    }
 } // namespace trail_decision_making

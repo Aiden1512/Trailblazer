@@ -46,10 +46,21 @@ namespace trail_decision_making
         void onNavigationResult(const GoalHandleNavigateToPose::WrappedResult &result);
         void onEdgeFinished();
         void obstacleStopCallback(const std_msgs::msg::Bool::SharedPtr msg);
+        void beginBacktracking();
+        void sendNextBacktrackWaypoint();
+        void onBacktrackingFinished();
         void publishStatus(const std::string &text);
         void onStartRequest(
             const std::shared_ptr<std_srvs::srv::Trigger::Request>,
             std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+        // Aiden edit: Begin inspecting the next reachable blocked trail.
+        void beginOppositeSideInspection();
+// ===== AIDEN CHANGE 1: INSERT BEGIN =====
+// NEW CODE:
+        void startOppositeSideApproach();
+        void beginReturnHome();
+        void continueAfterRecovery();
+// ===== AIDEN CHANGE 1 END =====
 
         TrailGraph graph_;
         RoutePlanner planner_{graph_};
@@ -58,13 +69,67 @@ namespace trail_decision_making
 
         // Current mission state
         int current_node_id_ = -1;
+
+        // Aiden edit: Record the starting junction for the final return.
+        int mission_start_node_id_ = -1;
+
         int current_edge_id_ = -1;
         bool traversing_reverse_ = false;
         bool return_pass_pending_ = false;
         bool return_pass_active_ = false;
         bool mission_active_ = false;
+
+        bool navigation_goal_pending_ = false;
         bool obstacle_stop_active_ = false;
         bool transit_to_edge_start_ = false;
+        // Tracks obstacle recovery separately from normal trail inspection.
+        enum class RecoveryState
+        {
+            NONE,
+            CANCELLING,
+            BACKTRACKING,
+            WAITING_FOR_REROUTE
+        };
+
+        RecoveryState recovery_state_ = RecoveryState::NONE;
+
+        // The original trail and junction before encountering an obstacle.
+        int blocked_edge_id_ = -1;
+        int backtrack_entry_node_id_ = -1;
+
+        // Aiden edit: Track multiple blocked trails and their inspection progress.
+        struct BlockedTrailRecord
+        {
+            int edge_id;
+            int first_entry_node;
+            bool opposite_side_inspected = false;
+            bool opposite_side_unreachable = false;
+        };
+
+        std::vector<BlockedTrailRecord> blocked_trails_;
+
+        // Aiden edit: Tracks the current phase of blocked-trail inspection.
+        enum class InspectionPhase
+        {
+            NORMAL,
+            TRANSIT_TO_OPPOSITE_SIDE,
+            INSPECTING_OPPOSITE_SIDE,
+            RETURNING_FROM_OPPOSITE_SIDE,
+            RETURNING_HOME
+        };
+
+        InspectionPhase inspection_phase_ = InspectionPhase::NORMAL;
+
+        // Index of the blocked trail currently being inspected.
+        size_t active_blocked_trail_index_ = 0;
+
+        // Junction at the opposite end of the blocked trail.
+        int opposite_entry_node_id_ = -1;
+
+        // Saved navigation waypoints for returning to the entry junction.
+        std::vector<Waypoint> backtrack_waypoints_;
+        size_t backtrack_waypoint_index_ = 0;
+
         std::vector<Waypoint> current_waypoints_;
         size_t current_waypoint_index_ = 0;
         int goal_retry_count_ = 0; // consecutive aborts of the current waypoint
