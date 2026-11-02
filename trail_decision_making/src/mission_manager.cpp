@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
 #include <functional>
 
+#include "ament_index_cpp/get_package_share_directory.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
@@ -19,6 +21,14 @@ namespace trail_decision_making
     {
         // Declare parameters and get their values
         waypoints_file_ = declare_parameter<std::string>("waypoints_file", "");
+        if (!waypoints_file_.empty() &&
+            std::filesystem::path(waypoints_file_).is_relative())
+        {
+            waypoints_file_ = (
+                std::filesystem::path(
+                    ament_index_cpp::get_package_share_directory("trail_decision_making")) /
+                waypoints_file_).string();
+        }
         global_frame_ = declare_parameter<std::string>("global_frame", "map");
         robot_frame_ = declare_parameter<std::string>("robot_frame", "base_link");
         nav_action_name_ = declare_parameter<std::string>(
