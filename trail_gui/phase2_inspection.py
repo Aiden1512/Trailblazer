@@ -18,7 +18,9 @@ Placing an obstacle on the map also places a real obstacle in the simulation
 
 "Start Autonomous Inspection" starts the REAL mission: mission_manager holds on
 launch until the GUI calls /husky1/start_mission (see mission_status.py), and its
-replies and progress appear in the log.
+replies and progress appear in the log. Once it is running, "E-STOP" stops the
+robot where it is and holds the mission, "Resume" carries on from there, and
+"Return Home" skips the trails still to inspect and drives home along the trails.
 
 The Robot Status section shows the real robot's state: the obstacle detector's
 warn/stop flags, the mission manager's latest status line, and the camera
@@ -99,6 +101,16 @@ class Phase2Frame(ttk.Frame):
         self.start_btn = tk.Button(controls, text="Start Autonomous Inspection",
                                     command=self._start_inspection, **button_opts)
         self.start_btn.pack(side="right")
+
+        mission_controls = ttk.Frame(left)
+        mission_controls.pack(fill="x")
+        tk.Button(mission_controls, text="E-STOP", command=self._estop, bg="#c0392b", fg="white",
+                  activebackground="#962d22", activeforeground="white",
+                  **dict(button_opts, font=("Arial", 13, "bold"), padx=24)).pack(side="left")
+        tk.Button(mission_controls, text="Resume", command=self._resume, bg="#2e7d32", fg="white",
+                  activebackground="#1b5e20", activeforeground="white", **button_opts).pack(side="left", padx=6)
+        tk.Button(mission_controls, text="Return Home", command=self._return_home, bg="#1565c0", fg="white",
+                  activebackground="#0d47a1", activeforeground="white", **button_opts).pack(side="left")
 
         right = ttk.Frame(main)
         right.pack(side="left", fill="y", padx=(14, 0))
@@ -238,6 +250,33 @@ class Phase2Frame(ttk.Frame):
         self.status_feed.request_start()       # the reply is logged by _poll_robot_status
         self.phase_var.set("Mission: autonomous inspection requested")
 
+    # ---------------- mission controls ----------------
+    # mission_manager decides whether each makes sense right now (e.g. Resume when not stopped); its reply is
+    # logged by _poll_robot_status.
+    def _estop(self):
+        if self.status_feed is None:
+            self._log("Can't e-stop: not connected to ROS.")
+            return
+        self._log("E-STOP pressed: stopping the robot...")
+        self.status_feed.request_pause()
+        self.phase_var.set("Mission: E-STOPPED")
+
+    def _resume(self):
+        if self.status_feed is None:
+            self._log("Can't resume: not connected to ROS.")
+            return
+        self._log("Asking mission_manager to resume...")
+        self.status_feed.request_resume()
+        self.phase_var.set("Mission: resume requested")
+
+    def _return_home(self):
+        if self.status_feed is None:
+            self._log("Can't return home: not connected to ROS.")
+            return
+        self._log("Asking mission_manager to skip the remaining trails and return home...")
+        self.status_feed.request_return_home()
+        self.phase_var.set("Mission: return home requested")
+
     # ---------------- drawing / logging ----------------
     def _redraw(self):
         self.canvas.draw_mission_graph(self._graph)
@@ -277,9 +316,9 @@ class Phase2Frame(ttk.Frame):
         """Show what the real robot's obstacle detector and mission manager are
         reporting, and log every change (even while this tab is hidden)."""
         if self.status_feed is not None:
-            while not self.status_feed.start_results.empty():
-                ok, message = self.status_feed.start_results.get_nowait()
-                self._log(("Robot: " if ok else "Robot not started: ") + message)
+            while not self.status_feed.command_results.empty():
+                ok, message = self.status_feed.command_results.get_nowait()
+                self._log(("Robot: " if ok else "Not done: ") + message)
             level, mission_text = self.status_feed.get()
             if level != self._last_obstacle_level:
                 if level in OBSTACLE_LOG:

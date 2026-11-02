@@ -47,6 +47,9 @@ namespace trail_decision_making
         rclcpp::Publisher<std_msgs::msg::String>::SharedPtr blocked_points_pub_; // blocked spots for the GUI map
         rclcpp::TimerBase::SharedPtr follow_trail_timer_;
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv_;   // the GUI's "Start Autonomous Inspection" button
+        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr pause_srv_;   // the GUI's "E-STOP" button
+        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr resume_srv_;  // the GUI's "Resume" button
+        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr home_srv_;    // the GUI's "Return Home" button
         GoalHandleNavigateToPose::SharedPtr current_goal_handle_;
 
         // Mission control methods
@@ -77,6 +80,7 @@ namespace trail_decision_making
         void handleNavigationFailure();
         void replanFromNearestJunction();
         void startBacktrackToJunction(const std::string &reason);
+        void driveBackToJunction();
         bool markCurrentEdgeBlocked();
         void recordBlockedPoint();
         void publishBlockedPoints();
@@ -86,6 +90,19 @@ namespace trail_decision_making
         void onStartRequest(
             const std::shared_ptr<std_srvs::srv::Trigger::Request>,
             std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+        void onPauseRequest(
+            const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+            std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+        void onResumeRequest(
+            const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+            std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+        void onReturnHomeRequest(
+            const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+            std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+        void haltRobot();
+        void clearPause();
+        void resumeDriving();
+        double distanceHomeFrom(int node_id) const;
 
         TrailGraph graph_;
         RoutePlanner planner_{graph_};
@@ -116,6 +133,11 @@ namespace trail_decision_making
         bool backtracking_ = false;          // retracing the blocked edge back to the junction we came from
         bool returning_home_ = false;        // nothing left to inspect; following trails back home
         bool driving_to_home_pose_ = false;  // final leg from the home junction to (home_x_, home_y_)
+        bool paused_ = false;                // e-stopped from the GUI: no goals are sent until resumed
+        // Bumped for every goal sent and every cancel; callbacks of goals sent under an older number are ignored.
+        // A goal Nav2 preempts with a newer one finishes ABORTED, which must not count as the new goal failing.
+        unsigned goal_seq_ = 0;
+        bool home_requested_ = false;        // the GUI's Return Home skipped the trails still to inspect
         double home_x_ = 6.5;
         double home_y_ = 4.0;
         int home_node_id_ = -1; // junction nearest the home position

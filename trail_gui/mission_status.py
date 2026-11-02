@@ -10,11 +10,15 @@ What the real robot is doing: obstacle detection and mission progress, via ROS 2
     /husky1/water_detected      std_msgs/Bool    water (blue ground) in slow range (water_guard, every camera frame)
     /husky1/water_stop          std_msgs/Bool    forward teleop blocked by water   (water_guard, every camera frame)
     /husky1/start_mission       std_srvs/Trigger starts the inspection             (mission_manager holds until called)
+    /husky1/pause_mission       std_srvs/Trigger e-stop: robot stops where it is, mission paused
+    /husky1/resume_mission      std_srvs/Trigger carry on from where the e-stop left off
+    /husky1/return_home         std_srvs/Trigger skip the trails still to inspect and go home
 
 MissionStatusFeed listens in a background thread and keeps the latest values;
 the GUI polls get() and status() so no Tk calls are made from the ROS thread.
-request_start() asks mission_manager to start; its answer is queued in
-start_results as (ok, message) for the GUI to log.
+request_start(), request_pause(), request_resume() and request_return_home()
+ask mission_manager to act; each answer is queued in command_results as
+(ok, message) for the GUI to log.
 """
 import json
 import os
@@ -44,6 +48,9 @@ PROGRESS_TOPIC = "/husky1/mission_progress"
 BLOCKED_TOPIC = "/husky1/blocked_points"
 GRAPH_TOPIC = "/husky1/mission_graph"
 START_SERVICE = "/husky1/start_mission"
+PAUSE_SERVICE = "/husky1/pause_mission"
+RESUME_SERVICE = "/husky1/resume_mission"
+HOME_SERVICE = "/husky1/return_home"
 WATER_WARN_TOPIC = "/husky1/water_detected"
 WATER_STOP_TOPIC = "/husky1/water_stop"
 FRONT_OBSTACLE_TOPIC = "/husky1/front_obstacle"
@@ -69,8 +76,8 @@ class MissionStatusFeed:
         self._front_obstacle = "None"
         self._last_front_obstacle_time = None
         self._startup_error = ""
-        self._start_client = None
-        self.start_results = queue.Queue()
+        self._clients = {}                # service name -> Trigger client
+        self.command_results = queue.Queue()
 
         self._stop_event = threading.Event()
         self._thread = None
@@ -103,7 +110,8 @@ class MissionStatusFeed:
             self._node.create_subscription(Float32, PROGRESS_TOPIC, self._on_progress, latched)
             self._node.create_subscription(String, BLOCKED_TOPIC, self._on_blocked, latched)
             self._node.create_subscription(String, GRAPH_TOPIC, self._on_graph, latched)
-            self._start_client = self._node.create_client(Trigger, START_SERVICE)
+            for service in (START_SERVICE, PAUSE_SERVICE, RESUME_SERVICE, HOME_SERVICE):
+                self._clients[service] = self._node.create_client(Trigger, service)
             self._executor = SingleThreadedExecutor()
             self._executor.add_node(self._node)
         except Exception as exc:
@@ -135,7 +143,7 @@ class MissionStatusFeed:
             self._holds_context = False
         self._executor = None
         self._node = None
-        self._start_client = None
+        self._clients = {}
 
     def _spin(self):
         while not self._stop_event.is_set():
@@ -197,26 +205,43 @@ class MissionStatusFeed:
             self._front_obstacle = msg.data
             self._last_front_obstacle_time = time.monotonic()
 
-    def _on_start_reply(self, future):
+    def _on_reply(self, future, action):
         try:
             reply = future.result()
         except Exception as exc:
-            self.start_results.put((False, f"Start request failed: {exc}"))
+            self.command_results.put((False, f"Request to {action} failed: {exc}"))
             return
-        self.start_results.put((reply.success, reply.message))
+        self.command_results.put((reply.success, reply.message))
 
     # ---------------- commands ----------------
+    def _request(self, service, action):
+        """Call one of mission_manager's Trigger services. Doesn't block; the
+        answer (or why it couldn't be asked) arrives in command_results."""
+        client = self._clients.get(service)
+        if client is None:
+            self.command_results.put((False, f"Can't {action}: ROS isn't connected. " + self._startup_error))
+            return
+        if not client.service_is_ready():
+            self.command_results.put((False, f"Can't {action}: mission_manager isn't running "
+                                             f"(nothing offering {service})."))
+            return
+        client.call_async(Trigger.Request()).add_done_callback(lambda future: self._on_reply(future, action))
+
     def request_start(self):
-        """Ask mission_manager to start the inspection. Doesn't block; the
-        answer (or why it couldn't be asked) arrives in start_results."""
-        if self._start_client is None:
-            self.start_results.put((False, "Can't start the mission: ROS isn't connected. " + self._startup_error))
-            return
-        if not self._start_client.service_is_ready():
-            self.start_results.put((False, f"Can't start the mission: mission_manager isn't running "
-                                           f"(nothing offering {START_SERVICE})."))
-            return
-        self._start_client.call_async(Trigger.Request()).add_done_callback(self._on_start_reply)
+        """Ask mission_manager to start the inspection."""
+        self._request(START_SERVICE, "start the mission")
+
+    def request_pause(self):
+        """E-stop: ask mission_manager to stop the robot where it is and hold the mission."""
+        self._request(PAUSE_SERVICE, "stop the mission")
+
+    def request_resume(self):
+        """Ask mission_manager to carry on from where the e-stop left off."""
+        self._request(RESUME_SERVICE, "resume the mission")
+
+    def request_return_home(self):
+        """Ask mission_manager to skip the trails still to inspect and go home."""
+        self._request(HOME_SERVICE, "return home")
 
     # ---------------- GUI-facing API ----------------
     def get(self):
