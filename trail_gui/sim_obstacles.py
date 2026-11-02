@@ -2,7 +2,8 @@
 Places (and removes) obstacles in the running Ignition Gazebo simulation.
 
 When the operator places an obstacle on the Phase 2 map, SimObstacleSpawner
-asks the simulator to create a real model at the same spot, using Gazebo's
+asks the simulator to create a real rock (the trail world's Grey_Rock mesh,
+scaled down) at the same spot, using Gazebo's
 `/world/<world>/create` service (and `/world/<world>/remove` to take them
 away again). It does this by calling the `ign service` command line tool
 (`gz service` on newer Gazebo), the same toolchain the simulation is launched
@@ -16,31 +17,42 @@ Calls take a second or two, so they run in background threads. Outcomes are
 queued in `results` as (ok, message) for the GUI to log.
 """
 import itertools
+import math
 import os
 import queue
+import random
 import re
 import shutil
 import subprocess
 import threading
 import time
 
-OBSTACLE_WIDTH_M = 0.6          # footprint of the box
-OBSTACLE_HEIGHT_M = 1.0         # tall enough for the lidar to see it
+# The trail world's Grey_Rock mesh (41068_ignition_bringup/models/Grey_Rock), narrower than the world's own
+# rocks (scale 0.5, about 2 m across) so there is room to go around it, but about 1 m tall: the LiDAR is
+# 0.8 m up and its lowest beam points 15 deg down, so it passes 0.4 m above the ground at the stop distance
+# and higher still as the robot creeps closer. A shorter rock drops out of view once the robot stops for it.
+# Scale is in the mesh's own axes (y up): about 1.0 x 1.15 m across and 0.97 m tall.
+OBSTACLE_MESH = "model://Grey_Rock/Mesh/Grey_Rock.obj"
+OBSTACLE_SCALE_ACROSS = 0.25
+OBSTACLE_SCALE_UP = 0.4
 CALL_TIMEOUT_MS = 5000
 
+# The link is turned +90 deg about x like in Grey_Rock's model.sdf (the mesh is y-up); the model's yaw
+# turns each rock a different way so they don't all look the same.
 _SDF = ("<?xml version='1.0'?>"
         "<sdf version='1.8'><model name='{name}'><static>true</static>"
-        "<pose>{x:.3f} {y:.3f} {z:.3f} 0 0 0</pose>"
-        "<link name='link'>"
-        "<collision name='collision'><geometry><box><size>{w} {w} {h}</size></box></geometry></collision>"
-        "<visual name='visual'><geometry><box><size>{w} {w} {h}</size></box></geometry>"
-        "<material><ambient>0.9 0.3 0.1 1</ambient><diffuse>0.9 0.3 0.1 1</diffuse></material></visual>"
+        "<pose>{x:.3f} {y:.3f} 0 0 0 {yaw:.3f}</pose>"
+        "<link name='link'><pose>0 0 0 1.5708 0 0</pose>"
+        "<collision name='collision'><geometry><mesh><uri>{mesh}</uri><scale>{a} {u} {a}</scale></mesh>"
+        "</geometry></collision>"
+        "<visual name='visual'><geometry><mesh><uri>{mesh}</uri><scale>{a} {u} {a}</scale></mesh>"
+        "</geometry></visual>"
         "</link></model></sdf>")
 
 
 def build_obstacle_sdf(name, x_m, y_m):
-    return _SDF.format(name=name, x=x_m, y=y_m, z=OBSTACLE_HEIGHT_M / 2,
-                       w=OBSTACLE_WIDTH_M, h=OBSTACLE_HEIGHT_M)
+    return _SDF.format(name=name, x=x_m, y=y_m, yaw=random.uniform(-math.pi, math.pi),
+                       mesh=OBSTACLE_MESH, a=OBSTACLE_SCALE_ACROSS, u=OBSTACLE_SCALE_UP)
 
 
 def _pb_string(text):

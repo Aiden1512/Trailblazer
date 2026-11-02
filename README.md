@@ -122,7 +122,7 @@ If continuing directly from Phase 1, **do not launch a second simulation**.
 For a fresh simulation in the trail world:
 
 ```bash
-ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py slam:=true nav2:=true rviz:=true world:=trail_world
+ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py slam:=true nav2:=true rviz:=true world:=trail_world spawn_x:=6.5 spawn_y:=4 spawn_yaw:=3.14159
 ```
 
 Alternatively, for the obstacle world:
