@@ -137,7 +137,9 @@ class Phase2Frame(ttk.Frame):
         self.obstacle_banner.pack(anchor="w", fill="x")
         self.mission_var = tk.StringVar(value="Mission: no updates from mission_manager yet")
         ttk.Label(right, textvariable=self.mission_var, wraplength=280,
-                  justify="left").pack(anchor="w", pady=(2, 10))
+                  justify="left").pack(anchor="w", pady=(2, 0))
+        self.mission_progress_var = tk.StringVar(value="Mission completion: -")
+        ttk.Label(right, textvariable=self.mission_progress_var).pack(anchor="w", pady=(0, 10))
         self._show_obstacle_level(None, "Obstacle detector not connected")
 
         ttk.Label(right, text="Legend", font=("Arial", 11, "bold")).pack(anchor="w")
@@ -351,6 +353,9 @@ class Phase2Frame(ttk.Frame):
                 self.mission_var.set("Mission: " + mission_text)
                 self._log("Mission: " + mission_text)
                 self._last_mission_text = mission_text
+            progress = self.status_feed.get_progress()
+            if progress is not None:
+                self.mission_progress_var.set(f"Mission completion: {progress:.0f}%")
         if self.snapshot_feed is not None:
             frame_id, _frame = self.snapshot_feed.get_frame()
             if frame_id != self._last_snapshot_id:

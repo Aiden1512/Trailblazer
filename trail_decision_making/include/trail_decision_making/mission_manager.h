@@ -8,6 +8,7 @@
 
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "std_msgs/msg/bool.hpp"
+#include "std_msgs/msg/float32.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/trigger.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
@@ -34,6 +35,7 @@ namespace trail_decision_making
         rclcpp_action::Client<NavigateToPose>::SharedPtr nav_client_;
         rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr obstacle_stop_sub_;
         rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_; // one-line progress for the GUI
+        rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr progress_pub_; // mission completion, 0-100 %
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv_;   // the GUI's "Start Autonomous Inspection" button
         GoalHandleNavigateToPose::SharedPtr current_goal_handle_;
 
@@ -47,6 +49,17 @@ namespace trail_decision_making
         void onEdgeFinished();
         void obstacleStopCallback(const std_msgs::msg::Bool::SharedPtr msg);
         void publishStatus(const std::string &text);
+        void publishProgress();
+        std::string progressText() const;
+        std::string junctionName(int node_id) const;
+        bool onTrailEdge() const;
+        bool canBacktrack() const;
+        void handleNavigationFailure();
+        void replanFromNearestJunction();
+        void startBacktrackToJunction(const std::string &reason);
+        void startReturnHome();
+        void sendHomeGoal();
+        void finishMission();
         void onStartRequest(
             const std::shared_ptr<std_srvs::srv::Trigger::Request>,
             std::shared_ptr<std_srvs::srv::Trigger::Response> response);
@@ -61,18 +74,25 @@ namespace trail_decision_making
         int current_node_id_ = -1;
         int current_edge_id_ = -1;
         bool traversing_reverse_ = false;
-        bool return_pass_pending_ = false;
-        bool return_pass_active_ = false;
+        bool inspecting_edge_ = false; // current edge was uninspected, so finishing it marks it inspected
         bool mission_active_ = false;
         bool obstacle_stop_active_ = false;      // latest value of the obstacle_stop topic
         bool obstacle_pause_active_ = false;     // stopped, waiting before trying to go around
         bool obstacle_avoidance_active_ = false; // Nav2 is replanning around the obstacle; stop topic ignored
         double obstacle_wait_sec_ = 4.0;
+        bool backtracking_ = false;          // retracing the blocked edge back to the junction we came from
+        bool returning_home_ = false;        // nothing left to inspect; following trails back home
+        bool driving_to_home_pose_ = false;  // final leg from the home junction to (home_x_, home_y_)
+        double home_x_ = 6.5;
+        double home_y_ = 4.0;
+        int home_node_id_ = -1; // junction nearest the home position
         bool transit_to_edge_start_ = false;
         std::vector<Waypoint> current_waypoints_;
         size_t current_waypoint_index_ = 0;
         int goal_retry_count_ = 0; // consecutive aborts of the current waypoint
         int max_goal_retries_ = 3;
+        int failed_recoveries_ = 0;     // Nav2 failures handled since a waypoint was last reached
+        int max_failed_recoveries_ = 5; // more than this in a row and the mission stops
         double retry_delay_sec_ = 2.0;
         bool auto_start_ = false; // start as soon as TF is up instead of waiting for /husky1/start_mission
         // a deque is used here because we will be popping from the front as we traverse edges

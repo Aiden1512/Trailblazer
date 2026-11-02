@@ -4,6 +4,7 @@ What the real robot is doing: obstacle detection and mission progress, via ROS 2
     /husky1/obstacle_detected   std_msgs/Bool    warn  - obstacle in the warn range   (ground_filter, every lidar frame)
     /husky1/obstacle_stop       std_msgs/Bool    stop  - obstacle in the stop range   (ground_filter, every lidar frame)
     /husky1/mission_status      std_msgs/String  one-line mission progress         (mission_manager, latched)
+    /husky1/mission_progress    std_msgs/Float32 mission completion, 0-100 %       (mission_manager, latched)
     /husky1/water_detected      std_msgs/Bool    water (blue ground) in slow range (water_guard, every camera frame)
     /husky1/water_stop          std_msgs/Bool    forward teleop blocked by water   (water_guard, every camera frame)
     /husky1/start_mission       std_srvs/Trigger starts the inspection             (mission_manager holds until called)
@@ -25,7 +26,7 @@ try:
     from rclpy.node import Node
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
-    from std_msgs.msg import Bool, String
+    from std_msgs.msg import Bool, Float32, String
     from std_srvs.srv import Trigger
     ROS_AVAILABLE = True
     _ROS_IMPORT_ERROR = ""
@@ -36,6 +37,7 @@ except Exception as exc:                  # normally ImportError; never let it c
 WARN_TOPIC = "/husky1/obstacle_detected"
 STOP_TOPIC = "/husky1/obstacle_stop"
 MISSION_TOPIC = "/husky1/mission_status"
+PROGRESS_TOPIC = "/husky1/mission_progress"
 START_SERVICE = "/husky1/start_mission"
 WATER_WARN_TOPIC = "/husky1/water_detected"
 WATER_STOP_TOPIC = "/husky1/water_stop"
@@ -52,6 +54,7 @@ class MissionStatusFeed:
         self._warn = False
         self._stop = False
         self._mission_text = None
+        self._mission_progress = None
         self._last_detector_time = None
         self._water_warn = False
         self._water_stop = False
@@ -90,6 +93,7 @@ class MissionStatusFeed:
             latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                  durability=DurabilityPolicy.TRANSIENT_LOCAL)
             self._node.create_subscription(String, MISSION_TOPIC, self._on_mission, latched)
+            self._node.create_subscription(Float32, PROGRESS_TOPIC, self._on_progress, latched)
             self._start_client = self._node.create_client(Trigger, START_SERVICE)
             self._executor = SingleThreadedExecutor()
             self._executor.add_node(self._node)
@@ -156,6 +160,10 @@ class MissionStatusFeed:
         with self._lock:
             self._mission_text = msg.data
 
+    def _on_progress(self, msg):
+        with self._lock:
+            self._mission_progress = msg.data
+
     def _on_front_obstacle(self, msg):
         with self._lock:
             self._front_obstacle = msg.data
@@ -193,6 +201,12 @@ class MissionStatusFeed:
         if last is None or time.monotonic() - last > STALE_AFTER_S:
             return None, text
         return ("stop" if stop else "warn" if warn else "clear"), text
+
+    def get_progress(self):
+        """Return the mission completion percentage (0-100), or None until
+        mission_manager has started a mission."""
+        with self._lock:
+            return self._mission_progress
 
     def get_water(self):
         """Return 'stop', 'warn', 'clear', or None while water_guard isn't

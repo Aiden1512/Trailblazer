@@ -9,13 +9,17 @@
     base_link_frame: husky1_base_link
     world_frame: husky1_odom
     odom0: odometry
+    # Gazebo's odometry pose is the robot's world pose, so fusing x, y and yaw keeps the
+    # EKF on the real pose. With velocities alone, the velocity spike Gazebo publishes
+    # just after spawning away from the origin gets integrated and shifts the whole map
+    # frame (seen as ~4 m / 15 deg off after spawning at 6.5, 4).
     odom0_config:
+    - true
+    - true
     - false
     - false
     - false
-    - false
-    - false
-    - false
+    - true
     - true
     - true
     - false

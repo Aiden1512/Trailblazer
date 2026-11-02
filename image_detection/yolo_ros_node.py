@@ -1,5 +1,9 @@
+import os
+
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 from cv_bridge import CvBridge
@@ -14,12 +18,16 @@ class YOLOObstacleDetector(Node):
 
         self.bridge = CvBridge()
 
-        #Change location to where it is saved on your computed
-        self.model = YOLO(
-            '/home/sourr/yoloe_test/runs/obstacle_detection_lowmem/weights/best.pt'
-        )
+        # Weights default to best.pt next to this script; override with --ros-args -p weights:=/path/to/best.pt
+        default_weights = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'best.pt')
+        weights = self.declare_parameter('weights', default_weights).value
+        self.get_logger().info(f'Loading YOLO weights from {weights}')
+        self.model = YOLO(weights)
 
-        self.image_sub = self.create_subscription(Image, '/husky1/camera/image', self.image_callback, 10)
+        # Keep only the newest frame: inference on the CPU is slower than the camera, and a deeper
+        # queue would annotate stale frames (so the obstacle snapshot would show the trail before the stop).
+        self.image_sub = self.create_subscription(Image, '/husky1/camera/image', self.image_callback,
+                                                  qos_profile_sensor_data)
 
         self.detection_pub = self.create_publisher(String, '/husky1/obstacle_detections', 10)
 
@@ -99,11 +107,12 @@ def main():
 
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():  # Ctrl+C / SIGTERM may already have shut the context down
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

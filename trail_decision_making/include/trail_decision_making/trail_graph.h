@@ -27,6 +27,7 @@ namespace trail_decision_making
     struct TrailNode
     {
         int id = -1; // index into TrailGraph::nodes_
+        int junction_id = -1; // id from the YAML junctions list, -1 for a trail dead end
         Waypoint position;
     };
 
@@ -70,6 +71,8 @@ namespace trail_decision_making
 
         // (inspected + blocked) / total, 0.0 if graph is empty
         double explorationPercentage() const;
+
+        size_t countEdges(EdgeStatus status) const;
 
         void resetAllEdgesToUninspected();
         std::pair<double, double> pointToSegment(double px, double py, double ax, double ay, double bx, double by);

@@ -5,6 +5,7 @@
 
 #include "yaml-cpp/yaml.h"
 #include <algorithm>
+#include <unordered_map>
 #include <utility>
 
 namespace trail_decision_making
@@ -46,27 +47,69 @@ namespace trail_decision_making
                 return false;
             }
 
+            // Junctions recorded by the mapping team become the graph nodes, and trails are
+            // joined to them by start_junction/end_junction. Trail waypoints start and end a
+            // metre or two away from the junction, so they can't be joined by position alone.
+            std::unordered_map<int, int> junction_nodes; // YAML junction id -> node id
+            const YAML::Node junctions = root["junctions"];
+            if (junctions && junctions.IsSequence())
+            {
+                for (const auto &junction : junctions)
+                {
+                    const int node_id = getOrCreateNode(
+                        junction["x"].as<double>(), junction["y"].as<double>(), junction["yaw"].as<double>(0.0));
+                    nodes_[node_id].junction_id = junction["id"].as<int>();
+                    junction_nodes[junction["id"].as<int>()] = node_id;
+                }
+            }
+            // node id for a trail's start_junction/end_junction, -1 if it is null or unknown
+            auto junctionNode = [&junction_nodes](const YAML::Node &key)
+            {
+                if (!key || key.IsNull())
+                {
+                    return -1;
+                }
+                const auto it = junction_nodes.find(key.as<int>());
+                return it == junction_nodes.end() ? -1 : it->second;
+            };
+
             for (const auto &trail : trails)
             {
                 const YAML::Node wps = trail["waypoints"];
-                if (!wps || !wps.IsSequence() || wps.size() < 2) // need at least two waypoints to form an edge
+                if (!wps || !wps.IsSequence())
                 {
                     continue;
                 }
 
                 TrailEdge edge;
-                edge.trail_name = trail["name"] ? trail["name"].as<std::string>() : ""; 
+                edge.trail_name = trail["name"] ? trail["name"].as<std::string>() : "";
 
-                for (const auto &wp : wps) 
+                for (const auto &wp : wps)
                 {
                     edge.waypoints.push_back(
                         {wp["x"].as<double>(), wp["y"].as<double>(), wp["yaw"].as<double>(0.0)}); // default yaw to 0.0 if not provided
                 }
-                // Create nodes for the first and last waypoints of the edge, reusing existing nodes if they are within the merge tolerance
+                // Drive all the way into the junctions at each end, so the robot is at the junction when the edge is done
+                const int start_node = junctionNode(trail["start_junction"]);
+                const int end_node = junctionNode(trail["end_junction"]);
+                if (start_node >= 0)
+                {
+                    edge.waypoints.insert(edge.waypoints.begin(), nodes_[start_node].position);
+                }
+                if (end_node >= 0)
+                {
+                    edge.waypoints.push_back(nodes_[end_node].position);
+                }
+                if (edge.waypoints.size() < 2) // need at least two waypoints to form an edge
+                {
+                    continue;
+                }
+                // Ends without a junction (old files, or a dead-end trail) get a node at the first/last waypoint,
+                // reusing existing nodes if they are within the merge tolerance
                 const Waypoint &first = edge.waypoints.front();
                 const Waypoint &last = edge.waypoints.back();
-                edge.from_node = getOrCreateNode(first.x, first.y, first.yaw);
-                edge.to_node = getOrCreateNode(last.x, last.y, last.yaw);
+                edge.from_node = start_node >= 0 ? start_node : getOrCreateNode(first.x, first.y, first.yaw);
+                edge.to_node = end_node >= 0 ? end_node : getOrCreateNode(last.x, last.y, last.yaw);
                 edge.id = static_cast<int>(edges_.size());
                 edges_.push_back(std::move(edge));
             }
@@ -157,7 +200,14 @@ namespace trail_decision_making
             }
         }
         // return the fraction of edges that are inspected or blocked (important for UI)
-        return static_cast<double>(done) / static_cast<double>(edges_.size()); 
+        return static_cast<double>(done) / static_cast<double>(edges_.size());
+    }
+
+    // Number of edges with the given status
+    size_t TrailGraph::countEdges(EdgeStatus status) const
+    {
+        return static_cast<size_t>(std::count_if(edges_.begin(), edges_.end(),
+                                                 [status](const TrailEdge &e) { return e.status == status; }));
     }
     
     // Reset all edges to UNINSPECTED status. This is useful for testing or restarting a mission.

@@ -67,4 +67,46 @@ namespace trail_decision_making
         return {}; // no uninspected edges reachable
     }
 
+    // Plan a route from start_node to goal_node (e.g. back home), returning a sequence of edge ids to traverse.
+    // If goal_node is start_node or can't be reached, return an empty vector.
+    std::vector<int> RoutePlanner::planToNode(int start_node, int goal_node) const
+    {
+        // Same breadth-first search as planToNextUninspected, but any non-blocked edge may be used
+        std::queue<int> frontier;
+        std::unordered_map<int, std::pair<int, int>> parent; // node -> (prev node, edge used)
+        frontier.push(start_node);
+        parent[start_node] = {-1, -1};
+
+        while (!frontier.empty())
+        {
+            const int node = frontier.front();
+            frontier.pop();
+            if (node == goal_node) // reconstruct the path back to start_node
+            {
+                std::vector<int> path;
+                for (int cur = node; parent[cur].second != -1; cur = parent[cur].first)
+                {
+                    path.push_back(parent[cur].second);
+                }
+                std::reverse(path.begin(), path.end());
+                return path;
+            }
+            for (int edge_id : graph_.getConnectedEdges(node))
+            {
+                const TrailEdge *e = graph_.getEdge(edge_id);
+                if (!e || e->status == EdgeStatus::BLOCKED)
+                {
+                    continue;
+                }
+                const int next = otherEnd(edge_id, node);
+                if (parent.find(next) == parent.end())
+                {
+                    parent[next] = {node, edge_id};
+                    frontier.push(next);
+                }
+            }
+        }
+        return {}; // goal not reachable
+    }
+
 } // namespace trail_decision_making

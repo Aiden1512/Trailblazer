@@ -27,6 +27,11 @@ namespace trail_decision_making
         retry_delay_sec_ = declare_parameter<double>("retry_delay_sec", 2.0);
         obstacle_wait_sec_ = declare_parameter<double>("obstacle_wait_sec", 4.0);
         auto_start_ = declare_parameter<bool>("auto_start", false);
+        home_x_ = declare_parameter<double>("home_x", 6.5);
+        home_y_ = declare_parameter<double>("home_y", 4.0);
+        // true = mark the trail blocked and go back to the previous junction; false = let Nav2 plan around.
+        // Read each time an obstacle is handled, so it can be changed live with `ros2 param set`.
+        declare_parameter<bool>("backtrack_on_obstacle", true);
 
         // Initialize TF buffer and listener, and the navigation action client
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
@@ -42,6 +47,8 @@ namespace trail_decision_making
         // Latched so the GUI gets the current status even if it starts after us
         status_pub_ = create_publisher<std_msgs::msg::String>(
             "/husky1/mission_status", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
+        progress_pub_ = create_publisher<std_msgs::msg::Float32>(
+            "/husky1/mission_progress", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
         // The mission is held until the GUI's start button calls this service (unless auto_start is set)
         start_srv_ = create_service<std_srvs::srv::Trigger>(
             "/husky1/start_mission",
@@ -91,8 +98,11 @@ namespace trail_decision_making
         // Clear anything left over from a previous (finished or stopped) run
         route_.clear();
         current_goal_handle_.reset();
-        return_pass_pending_ = false;
-        return_pass_active_ = false;
+        inspecting_edge_ = false;
+        backtracking_ = false;
+        returning_home_ = false;
+        driving_to_home_pose_ = false;
+        failed_recoveries_ = 0;
 
         RCLCPP_INFO(get_logger(), "Start command received");
         publishStatus("Start command received");
@@ -158,6 +168,8 @@ namespace trail_decision_making
         current_node_id_ = graph_.findNearestNode(
             transform.transform.translation.x,
             transform.transform.translation.y);
+        home_node_id_ = graph_.findNearestNode(home_x_, home_y_);
+        publishProgress();
         mission_active_ = true;      // set the mission as active so we can start traversing edges
         chooseNextEdgeAndSendGoal(); // choose the next edge to traverse and send the first waypoint of that edge
     }
@@ -171,16 +183,25 @@ namespace trail_decision_making
 
         if (route_.empty()) // if we have no more edges to traverse
         {
-            // Plan a route to the next uninspected edge from the current node
-            const auto plan = planner_.planToNextUninspected(current_node_id_);
-            if (plan.empty()) // if there are no more uninspected edges, the mission is complete
+            // Plan a route to the next uninspected edge from the current node, or home once there are none left.
+            // Replanned from scratch every time, so trails blocked since the last plan are avoided.
+            const auto plan = returning_home_ ? planner_.planToNode(current_node_id_, home_node_id_)
+                                              : planner_.planToNextUninspected(current_node_id_);
+            if (plan.empty())
             {
-                RCLCPP_INFO(get_logger(), "Mission complete (%.0f%% explored)",
-                            graph_.explorationPercentage() * 100.0);
-                publishStatus("Mission complete (" +
-                              std::to_string(static_cast<int>(graph_.explorationPercentage() * 100.0)) +
-                              "% explored)");
-                mission_active_ = false;
+                if (returning_home_) // at the home junction (or it can't be reached on the trails), drive to the home pose
+                {
+                    if (current_node_id_ != home_node_id_)
+                    {
+                        RCLCPP_WARN(get_logger(), "No unblocked trail back to %s; asking Nav2 to drive straight home",
+                                    junctionName(home_node_id_).c_str());
+                    }
+                    sendHomeGoal();
+                }
+                else // no reachable uninspected edges left
+                {
+                    startReturnHome();
+                }
                 return;
             }
             route_.assign(plan.begin(), plan.end()); // assign the planned route to the route_ deque so we can traverse it
@@ -197,12 +218,10 @@ namespace trail_decision_making
         }
         // Determine if we are traversing the edge in reverse (from to_node to from_node) or not (from from_node to to_node)
         traversing_reverse_ = (edge->to_node == current_node_id_);        // if the current node is the to_node, we are traversing in reverse
-        return_pass_pending_ = (edge->status == EdgeStatus::UNINSPECTED); // if the edge is uninspected, we will do a return pass after the first traversal
-        return_pass_active_ = false;
+        inspecting_edge_ = (edge->status == EdgeStatus::UNINSPECTED); // false for already-inspected edges we are only passing through
         startEdgeFollow(*edge, traversing_reverse_); // start traversing the edge, either in reverse or not, depending on the current node
     }
-    // This method is called when we have finished traversing an edge, either because we reached the last waypoint or because we finished a return pass of an uninspected edge.
-    // It updates the current node and edge state, and either starts a return pass or chooses the next edge to traverse.
+    // Follow the edge's waypoints from current_node_id_ to its other end, driving to the entry waypoint first if we are not there.
     void MissionManager::startEdgeFollow(const TrailEdge &edge, bool reverse)
     {
         auto waypoints = edge.waypoints; // copy the waypoints so we can modify them without affecting the original edge
@@ -333,7 +352,21 @@ namespace trail_decision_making
         orientation.setRPY(0.0, 0.0, target_yaw);
         goal.pose.pose.orientation = tf2::toMsg(orientation);
 
-        if (transit_to_edge_start_ && current_waypoint_index_ == 0)
+        if (driving_to_home_pose_)
+        {
+            RCLCPP_INFO(get_logger(), "Sending home goal (%.2f, %.2f)", waypoint.x, waypoint.y);
+            publishStatus("Returning to the home position - " + progressText());
+        }
+        else if (backtracking_)
+        {
+            RCLCPP_INFO(get_logger(), "Backtracking to %s: waypoint %zu/%zu (%.2f, %.2f)",
+                        junctionName(current_node_id_).c_str(), current_waypoint_index_ + 1,
+                        current_waypoints_.size(), waypoint.x, waypoint.y);
+            publishStatus("Edge " + std::to_string(current_edge_id_) + " blocked: returning to " +
+                          junctionName(current_node_id_) + " (" + std::to_string(current_waypoint_index_ + 1) +
+                          "/" + std::to_string(current_waypoints_.size()) + ")");
+        }
+        else if (transit_to_edge_start_ && current_waypoint_index_ == 0)
         {
             RCLCPP_INFO(get_logger(), "Sending transit goal to edge %d entry waypoint",
                         current_edge_id_);
@@ -344,8 +377,9 @@ namespace trail_decision_making
             RCLCPP_INFO(get_logger(), "Sending edge %d waypoint %zu/%zu: (%.2f, %.2f)",
                         current_edge_id_, current_waypoint_index_ + 1,
                         current_waypoints_.size(), waypoint.x, waypoint.y);
-            publishStatus("Edge " + std::to_string(current_edge_id_) +
-                          (return_pass_active_ ? " (return pass)" : "") + ": waypoint " +
+            publishStatus(std::string(returning_home_ ? "Heading home - " : "") + "Edge " +
+                          std::to_string(current_edge_id_) +
+                          (inspecting_edge_ ? " (inspecting)" : "") + ": waypoint " +
                           std::to_string(current_waypoint_index_ + 1) + "/" +
                           std::to_string(current_waypoints_.size()));
         }
@@ -409,15 +443,15 @@ namespace trail_decision_making
                         } });
                 return;
             }
-            RCLCPP_ERROR(get_logger(),
-                         "Nav2 failed edge %d: action result code=%d",
-                         current_edge_id_, static_cast<int>(result.code));
-            publishStatus("Stopped: Nav2 failed edge " + std::to_string(current_edge_id_));
-            mission_active_ = false;
+            RCLCPP_WARN(get_logger(),
+                        "Nav2 failed edge %d: action result code=%d",
+                        current_edge_id_, static_cast<int>(result.code));
+            handleNavigationFailure();
             return;
         }
 
         goal_retry_count_ = 0;
+        failed_recoveries_ = 0;
         transit_to_edge_start_ = false;
         ++current_waypoint_index_;
         // If we have not reached the last waypoint, send the next waypoint to Nav2.
@@ -433,10 +467,24 @@ namespace trail_decision_making
     }
 
     // This method is called when we have finished traversing an edge, either because we reached the last waypoint
-    // or because we finished a return pass of an uninspected edge. It updates the current node and edge state, and
-    // either starts a return pass or chooses the next edge to traverse.
+    // (or finished backtracking, or reached home). It updates the current node and edge state, and chooses the next edge to traverse.
     void MissionManager::onEdgeFinished()
     {
+        if (driving_to_home_pose_) // reached the home position, nothing left to do
+        {
+            finishMission();
+            return;
+        }
+        if (backtracking_) // back at the junction we started the blocked edge from; current_node_id_ is still that junction
+        {
+            backtracking_ = false;
+            RCLCPP_INFO(get_logger(), "Back at %s; replanning around blocked edge %d",
+                        junctionName(current_node_id_).c_str(), current_edge_id_);
+            publishStatus("Back at " + junctionName(current_node_id_) + "; replanning - " + progressText());
+            chooseNextEdgeAndSendGoal();
+            return;
+        }
+
         const TrailEdge *edge = graph_.getEdge(current_edge_id_); // get the edge again in case it was modified
         if (!edge)                                                // this should never happen, but just in case
         {
@@ -445,31 +493,27 @@ namespace trail_decision_making
             return;
         }
 
-        if (return_pass_pending_ && !return_pass_active_) // if we just finished the first pass of an uninspected edge, we need to do a return pass
-        {
-            current_node_id_ = planner_.otherEnd(current_edge_id_, current_node_id_); // update the current node to the other end of the edge so we can traverse it in reverse
-            return_pass_active_ = true;
-            traversing_reverse_ = !traversing_reverse_;
-            startEdgeFollow(*edge, traversing_reverse_); // start the return pass
-            return;
-        }
-
-        if (return_pass_active_) // if we just finished the return pass of an uninspected edge, we mark it as inspected and clear the return pass flags
+        // One pass along an uninspected edge inspects it. We then carry on from the far junction rather than
+        // driving back, so the next uninspected edge is planned from wherever this one ended.
+        if (inspecting_edge_)
         {
             graph_.setEdgeStatus(current_edge_id_, EdgeStatus::INSPECTED); // mark the edge as inspected
-            publishStatus("Edge " + std::to_string(current_edge_id_) + " inspected");
-            return_pass_pending_ = false;
-            return_pass_active_ = false;
+            publishProgress();
+            publishStatus("Edge " + std::to_string(current_edge_id_) + " inspected - " + progressText());
+            inspecting_edge_ = false;
         }
 
         current_node_id_ = planner_.otherEnd(current_edge_id_, current_node_id_); // update the current node to the other end of the edge so we can plan to the next uninspected edge
         chooseNextEdgeAndSendGoal();                                              // plan to the next uninspected edge and send the first waypoint of that edge
     }
 
-    // When an obstacle enters the stop range we cancel the Nav2 goal so the robot stops, wait
-    // obstacle_wait_sec_ for the obstacle to move away and for the costmaps to mark it, then
-    // resend the current waypoint so Nav2 plans a path around it. While Nav2 is going around,
-    // the stop topic is ignored (the robot will pass close to the obstacle) until it clears.
+    // When an obstacle enters the stop range we cancel the Nav2 goal so the robot stops, and wait
+    // obstacle_wait_sec_ for the obstacle to move away. If it is still there, either:
+    //  - backtrack_on_obstacle: mark the edge blocked, retrace it to the junction we came from and
+    //    replan the rest of the inspection from there, or
+    //  - otherwise: resend the current waypoint so Nav2 plans a path around it.
+    // While Nav2 is going around (or we are backtracking away from the obstacle), the stop topic is
+    // ignored until it clears, as the robot will pass close to the obstacle.
     void MissionManager::obstacleStopCallback(const std_msgs::msg::Bool::SharedPtr msg)
     {
         if (msg->data == obstacle_stop_active_) // if the obstacle stop state has not changed, we don't need to do anything
@@ -480,13 +524,14 @@ namespace trail_decision_making
         obstacle_stop_active_ = msg->data;
         if (obstacle_stop_active_)
         {
-            if (obstacle_avoidance_active_)
+            if (obstacle_avoidance_active_ || !mission_active_)
             {
-                return; // already going around an obstacle; let Nav2 handle it
+                return; // already going around an obstacle (let Nav2 handle it), or not driving at all
             }
             RCLCPP_WARN(get_logger(),
-                        "Obstacle is inside the stop range; stopping for %.1f s before going around",
-                        obstacle_wait_sec_);
+                        "Obstacle is inside the stop range; stopping for %.1f s before %s",
+                        obstacle_wait_sec_, canBacktrack() ? "backtracking" : "going around");
+            publishStatus("Obstacle ahead: stopped");
             obstacle_pause_active_ = true;
             if (retry_timer_)
             {
@@ -504,6 +549,11 @@ namespace trail_decision_making
                     obstacle_pause_active_ = false;
                     if (!mission_active_)
                     {
+                        return;
+                    }
+                    if (canBacktrack())
+                    {
+                        startBacktrackToJunction("Obstacle still blocking");
                         return;
                     }
                     RCLCPP_INFO(get_logger(), "Obstacle still present; asking Nav2 to plan around it");
@@ -529,6 +579,168 @@ namespace trail_decision_making
                 RCLCPP_INFO(get_logger(), "Obstacle stop cleared");
             }
         }
+    }
+
+    // True while driving along a trail edge, i.e. there is an edge to block and a junction to go back to.
+    // Not while driving to an edge's entry from off the trail network, on the final leg home, or while
+    // already backtracking.
+    bool MissionManager::onTrailEdge() const
+    {
+        return current_edge_id_ >= 0 &&
+               !backtracking_ &&
+               !driving_to_home_pose_ &&
+               !(transit_to_edge_start_ && current_waypoint_index_ == 0);
+    }
+
+    // Obstacles are only backtracked from on a trail edge, and only in backtrack mode;
+    // otherwise Nav2 goes around the obstacle instead.
+    bool MissionManager::canBacktrack() const
+    {
+        return get_parameter("backtrack_on_obstacle").as_bool() && onTrailEdge();
+    }
+
+    // Nav2 gave up on a waypoint (after retries). Rather than ending the mission, treat the edge as
+    // impassable and carry on inspecting whatever is still reachable, the long way round if need be.
+    void MissionManager::handleNavigationFailure()
+    {
+        if (++failed_recoveries_ > max_failed_recoveries_) // stuck: every recovery since the last reached waypoint failed too
+        {
+            RCLCPP_ERROR(get_logger(), "Nav2 failed %d times in a row; stopping the mission", failed_recoveries_);
+            publishStatus("Stopped: Nav2 keeps failing - " + progressText());
+            mission_active_ = false;
+            return;
+        }
+        if (driving_to_home_pose_)
+        {
+            RCLCPP_ERROR(get_logger(), "Nav2 could not reach the home position");
+            publishStatus("Inspection finished - " + progressText() + ", but Nav2 could not reach the home position");
+            mission_active_ = false;
+            return;
+        }
+        if (onTrailEdge()) // part way along the edge: block it and drive back to the junction we came from
+        {
+            startBacktrackToJunction("Nav2 cannot get along");
+            return;
+        }
+        if (current_edge_id_ >= 0 && !backtracking_) // could not even reach the edge's entry from here, so don't try it again
+        {
+            graph_.setEdgeStatus(current_edge_id_, EdgeStatus::BLOCKED);
+            publishProgress();
+            RCLCPP_WARN(get_logger(), "Could not reach the start of edge %d; marked blocked", current_edge_id_);
+        }
+        // Could not reach the edge entry, or could not drive back to the junction: carry on from the nearest junction
+        backtracking_ = false;
+        replanFromNearestJunction();
+    }
+
+    void MissionManager::replanFromNearestJunction()
+    {
+        try
+        {
+            const auto pose = tf_buffer_->lookupTransform(global_frame_, robot_frame_, tf2::TimePointZero);
+            current_node_id_ = graph_.findNearestNode(pose.transform.translation.x, pose.transform.translation.y);
+        }
+        catch (const tf2::TransformException &ex)
+        {
+            RCLCPP_WARN(get_logger(), "Could not get robot pose to replan; using %s: %s",
+                        junctionName(current_node_id_).c_str(), ex.what());
+        }
+        route_.clear();
+        inspecting_edge_ = false;
+        RCLCPP_INFO(get_logger(), "Replanning from %s", junctionName(current_node_id_).c_str());
+        publishStatus("Replanning from " + junctionName(current_node_id_) + " - " + progressText());
+        chooseNextEdgeAndSendGoal();
+    }
+
+    // The edge can't be driven (obstacle still there after the wait, or Nav2 gave up): mark it blocked, then
+    // retrace the waypoints already driven back to the junction this traversal started from (current_node_id_).
+    // When that is done onEdgeFinished() replans the rest of the inspection, which never uses blocked edges.
+    void MissionManager::startBacktrackToJunction(const std::string &reason)
+    {
+        graph_.setEdgeStatus(current_edge_id_, EdgeStatus::BLOCKED);
+        route_.clear(); // the old route may go through the blocked edge
+        inspecting_edge_ = false;
+        RCLCPP_WARN(get_logger(), "%s edge %d; marked blocked, returning to %s",
+                    reason.c_str(), current_edge_id_, junctionName(current_node_id_).c_str());
+        publishProgress();
+        publishStatus("Edge " + std::to_string(current_edge_id_) + " blocked by an obstacle - " + progressText());
+
+        // Waypoints before current_waypoint_index_ have been reached; drive them in reverse, ending at the junction
+        const size_t reached = std::max<size_t>(current_waypoint_index_, 1);
+        std::vector<Waypoint> back(current_waypoints_.begin(), current_waypoints_.begin() + reached);
+        std::reverse(back.begin(), back.end());
+        current_waypoints_ = back;
+        current_waypoint_index_ = 0;
+        transit_to_edge_start_ = false;
+        goal_retry_count_ = 0;
+        backtracking_ = true;
+        obstacle_avoidance_active_ = true; // the obstacle stays in the stop range while we turn away from it
+        sendNextWaypoint();
+    }
+
+    // No reachable uninspected trail is left, so follow the trails back to the junction nearest home
+    // (see chooseNextEdgeAndSendGoal), then sendHomeGoal() drives the last bit to the home position.
+    void MissionManager::startReturnHome()
+    {
+        returning_home_ = true;
+        const size_t unreachable = graph_.countEdges(EdgeStatus::UNINSPECTED);
+        RCLCPP_INFO(get_logger(), "Inspection finished (%s, %zu unreachable); returning home to (%.2f, %.2f)",
+                    progressText().c_str(), unreachable, home_x_, home_y_);
+        publishStatus("Inspection finished - " + progressText() +
+                      (unreachable > 0 ? ", " + std::to_string(unreachable) + " unreachable" : "") +
+                      ". Returning home");
+        chooseNextEdgeAndSendGoal();
+    }
+
+    void MissionManager::sendHomeGoal()
+    {
+        driving_to_home_pose_ = true;
+        current_edge_id_ = -1;
+        current_waypoints_ = {Waypoint{home_x_, home_y_, 0.0}};
+        current_waypoint_index_ = 0;
+        transit_to_edge_start_ = false;
+        goal_retry_count_ = 0;
+        sendNextWaypoint();
+    }
+
+    void MissionManager::finishMission()
+    {
+        driving_to_home_pose_ = false;
+        returning_home_ = false;
+        mission_active_ = false;
+        const size_t blocked = graph_.countEdges(EdgeStatus::BLOCKED);
+        const size_t unreachable = graph_.countEdges(EdgeStatus::UNINSPECTED);
+        RCLCPP_INFO(get_logger(), "Mission complete: %s, %zu blocked, %zu unreachable; robot is home",
+                    progressText().c_str(), blocked, unreachable);
+        publishProgress();
+        publishStatus("Mission complete - " + progressText() + " (" +
+                      std::to_string(graph_.countEdges(EdgeStatus::INSPECTED)) + " inspected, " +
+                      std::to_string(blocked) + " blocked, " + std::to_string(unreachable) +
+                      " unreachable). Robot is home");
+    }
+
+    // Completion = trails that have been resolved (inspected, or found blocked) out of all trails
+    void MissionManager::publishProgress()
+    {
+        std_msgs::msg::Float32 msg;
+        msg.data = static_cast<float>(graph_.explorationPercentage() * 100.0);
+        progress_pub_->publish(msg);
+    }
+
+    std::string MissionManager::progressText() const
+    {
+        return std::to_string(static_cast<int>(std::round(graph_.explorationPercentage() * 100.0))) + "% complete";
+    }
+
+    std::string MissionManager::junctionName(int node_id) const
+    {
+        if (node_id < 0 || node_id >= static_cast<int>(graph_.nodes().size()))
+        {
+            return "unknown junction";
+        }
+        const int junction_id = graph_.nodes()[node_id].junction_id;
+        return junction_id >= 0 ? "junction " + std::to_string(junction_id)
+                                : "trail end " + std::to_string(node_id);
     }
 
     void MissionManager::publishStatus(const std::string &text)

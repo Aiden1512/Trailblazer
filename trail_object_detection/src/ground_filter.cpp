@@ -63,7 +63,7 @@ GroundFilter::GroundFilter() : Node("ground_filter")
   scan_pub_ = create_publisher<sensor_msgs::msg::LaserScan>("/husky1/obstacle_scan", 10);
   RCLCPP_INFO(
       get_logger(),
-      "Obstacle snapshots: waiting for /husky1/camera/image when stop activates; publishing to "
+      "Obstacle snapshots: taking the next /husky1/yolo_image frame when stop activates; publishing to "
       "/husky1/obstacle_image");
 }
 
