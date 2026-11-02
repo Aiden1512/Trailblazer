@@ -52,14 +52,14 @@ OBSTACLE_LOG = {
 
 
 class Phase2Frame(ttk.Frame):
-    def __init__(self, parent, state: TrailState, on_back, pose_feed=None, spawner=None, camera_feed=None,
+    def __init__(self, parent, state: TrailState, on_back, pose_feed=None, spawner=None, on_open_camera=None,
                  status_feed=None, snapshot_feed=None):
         super().__init__(parent)
         self.state = state
         self.on_back = on_back
         self.pose_feed = pose_feed
         self.spawner = spawner
-        self.camera_feed = camera_feed
+        self.on_open_camera = on_open_camera
         self.status_feed = status_feed
         self.snapshot_feed = snapshot_feed
         self._last_obstacle_level = None
@@ -116,7 +116,10 @@ class Phase2Frame(ttk.Frame):
         right.pack(side="left", fill="y", padx=(14, 0))
 
         tk.Button(right, text="< Back to Start", command=self.on_back, cursor="hand2",
-                  font=("Arial", 10, "bold"), padx=10, pady=3, relief="raised", bd=2).pack(anchor="w", pady=(0, 12))
+                  font=("Arial", 10, "bold"), padx=10, pady=3, relief="raised", bd=2).pack(anchor="w", pady=(0, 6))
+        if self.on_open_camera is not None:
+            tk.Button(right, text="View Live Camera", command=self.on_open_camera, cursor="hand2",
+                      font=("Arial", 10, "bold"), padx=10, pady=3, relief="raised", bd=2).pack(anchor="w", pady=(0, 12))
 
         ttk.Label(right, text="Status", font=("Arial", 11, "bold")).pack(anchor="w")
         self.sim_var = tk.StringVar()
@@ -158,8 +161,6 @@ class Phase2Frame(ttk.Frame):
         if self.snapshot_feed is not None:
             CameraPanel(right, self.snapshot_feed, title="Obstacle Snapshot",
                         placeholder_text="NO SNAPSHOT YET").pack(anchor="w", pady=(0, 10))
-        if self.camera_feed is not None:
-            CameraPanel(right, self.camera_feed).pack(anchor="w", pady=(0, 10))
 
         ttk.Label(right, text="Inspection Log", font=("Arial", 11, "bold")).pack(anchor="w")
         log_frame = ttk.Frame(right)

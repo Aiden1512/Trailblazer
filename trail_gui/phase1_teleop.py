@@ -20,7 +20,6 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 import state as state_module
-from camera_panel import CameraPanel
 from map_canvas import MapCanvas
 from robot_pose import STATE_COLORS
 from state import TrailState, Node
@@ -43,14 +42,14 @@ WATER_TEXT = {
 
 
 class Phase1Frame(ttk.Frame):
-    def __init__(self, parent, state: TrailState, on_finish_mapping, on_back, pose_feed=None, on_reset=None, camera_feed=None, status_feed=None):
+    def __init__(self, parent, state: TrailState, on_finish_mapping, on_back, pose_feed=None, on_reset=None, on_open_camera=None, status_feed=None):
         super().__init__(parent)
         self.state = state
         self.on_finish_mapping = on_finish_mapping
         self.on_back = on_back
         self.pose_feed = pose_feed
         self.on_reset = on_reset
-        self.camera_feed = camera_feed
+        self.on_open_camera = on_open_camera
         self.status_feed = status_feed
 
         self.running = False
@@ -103,7 +102,10 @@ class Phase1Frame(ttk.Frame):
         right.pack(side="left", fill="y", padx=(14, 0))
 
         tk.Button(right, text="< Back to Start", command=self.on_back, cursor="hand2",
-                  font=("Arial", 10, "bold"), padx=10, pady=3, relief="raised", bd=2).pack(anchor="w", pady=(0, 12))
+                  font=("Arial", 10, "bold"), padx=10, pady=3, relief="raised", bd=2).pack(anchor="w", pady=(0, 6))
+        if self.on_open_camera is not None:
+            tk.Button(right, text="View Live Camera", command=self.on_open_camera, cursor="hand2",
+                      font=("Arial", 10, "bold"), padx=10, pady=3, relief="raised", bd=2).pack(anchor="w", pady=(0, 12))
 
         ttk.Label(right, text="Controls", font=("Arial", 11, "bold")).pack(anchor="w")
         ttk.Label(right, justify="left",
@@ -122,9 +124,6 @@ class Phase1Frame(ttk.Frame):
         if self.status_feed is not None:
             self.water_label.pack(anchor="w")
         ttk.Frame(right).pack(pady=(0, 12))      # gap before the next section
-
-        if self.camera_feed is not None:
-            CameraPanel(right, self.camera_feed).pack(anchor="w", pady=(0, 12))
 
         ttk.Label(right, text="Legend", font=("Arial", 11, "bold")).pack(anchor="w")
         ttk.Label(right, justify="left",

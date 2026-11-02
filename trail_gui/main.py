@@ -28,7 +28,8 @@ Phase 2 also shows the real robot's status: obstacle warn/stop from the
 obstacle detector, the mission manager's progress, and the obstacle snapshot
 from /husky1/obstacle_image.
 
-The live camera panel is on hold: set TRAILBLAZER_CAMERA=1 to switch it back on.
+Both tabs have a "View Live Camera" button that opens the robot's camera in a
+separate window; the camera is only streamed while that window is open.
 
 Run with:
     python3 main.py
@@ -38,7 +39,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 import state as state_module
-from camera_feed import CameraFeed, SNAPSHOT_TOPIC
+from camera_feed import CameraFeed, SNAPSHOT_TOPIC, DEFAULT_TOPIC as DEFAULT_CAMERA_TOPIC
+from camera_window import CameraWindow
 from mission_status import MissionStatusFeed
 from phase1_teleop import Phase1Frame
 from phase2_inspection import Phase2Frame
@@ -46,8 +48,6 @@ from robot_pose import RobotPoseFeed, DEFAULT_TOPIC as DEFAULT_ODOM_TOPIC
 from sim_obstacles import SimObstacleSpawner
 from start_screen import StartScreen
 from state import TrailState
-
-SHOW_CAMERA = os.environ.get("TRAILBLAZER_CAMERA", "0") == "1"      # camera feed is on hold
 
 PHASE1_TITLE = "Phase 1 - Teleop Mapping"
 PHASE2_TITLE = "Phase 2 - Autonomous Inspection"
@@ -71,11 +71,7 @@ class TrailBlazerApp:
         # ROS-facing parts. Each one copes with ROS being absent.
         self.pose_feed = RobotPoseFeed(os.environ.get("TRAILBLAZER_ODOM_TOPIC", DEFAULT_ODOM_TOPIC))
         self.pose_feed.start()
-        self.camera_feed = None
-        if SHOW_CAMERA:
-            from camera_feed import DEFAULT_TOPIC as DEFAULT_CAMERA_TOPIC
-            self.camera_feed = CameraFeed(os.environ.get("TRAILBLAZER_CAMERA_TOPIC", DEFAULT_CAMERA_TOPIC))
-            self.camera_feed.start()
+        self.camera_window = None        # opened on demand, see open_camera()
         self.status_feed = MissionStatusFeed()
         self.status_feed.start()
         self.snapshot_feed = CameraFeed(os.environ.get("TRAILBLAZER_SNAPSHOT_TOPIC", SNAPSHOT_TOPIC),
@@ -94,11 +90,11 @@ class TrailBlazerApp:
 
             self.phase2 = Phase2Frame(self.notebook, self.state, on_back=self.show_start,
                                       pose_feed=self.pose_feed, spawner=self.obstacle_spawner,
-                                      camera_feed=self.camera_feed, status_feed=self.status_feed,
+                                      on_open_camera=self.open_camera, status_feed=self.status_feed,
                                       snapshot_feed=self.snapshot_feed)
             self.phase1 = Phase1Frame(self.notebook, self.state, on_finish_mapping=self._go_to_phase2,
                                       on_back=self.show_start, pose_feed=self.pose_feed,
-                                      on_reset=self.phase2.clear_obstacles, camera_feed=self.camera_feed,
+                                      on_reset=self.phase2.clear_obstacles, on_open_camera=self.open_camera,
                                       status_feed=self.status_feed)
         except Exception:
             self._stop_feeds()       # don't leave ROS threads running if startup fails
@@ -157,13 +153,27 @@ class TrailBlazerApp:
         if self.notebook.tabs() and self.notebook.select() == str(self.phase1):
             self.phase1.focus_canvas()
 
+    # ---------------- live camera ----------------
+    def open_camera(self):
+        """Show the live camera window, or bring it to the front if it's already open."""
+        if self.camera_window is not None:
+            self.camera_window.deiconify()
+            self.camera_window.lift()
+            return
+        self.camera_window = CameraWindow(
+            self.root, os.environ.get("TRAILBLAZER_CAMERA_TOPIC", DEFAULT_CAMERA_TOPIC),
+            on_closed=self._camera_closed)
+
+    def _camera_closed(self):
+        self.camera_window = None
+
     # ---------------- shutdown ----------------
     def _stop_feeds(self):
         self.pose_feed.stop()
         self.status_feed.stop()
         self.snapshot_feed.stop()
-        if self.camera_feed is not None:
-            self.camera_feed.stop()
+        if self.camera_window is not None:
+            self.camera_window.close()
 
     def on_close(self):
         self._stop_feeds()               # shuts the ROS subscribers down cleanly
