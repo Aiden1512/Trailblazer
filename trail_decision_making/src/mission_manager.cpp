@@ -5,6 +5,7 @@
 #include <cmath>
 #include <functional>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 
 #include "tf2/LinearMath/Quaternion.h"
@@ -27,6 +28,8 @@ namespace trail_decision_making
             "nav_action_name", "navigate_to_pose");
         max_goal_retries_ = declare_parameter<int>("max_goal_retries", 3);
         retry_delay_sec_ = declare_parameter<double>("retry_delay_sec", 2.0);
+        waypoint_spacing_ = declare_parameter<double>("waypoint_spacing", 0.4);
+        follow_trail_line_ = declare_parameter<bool>("follow_trail_line", true);
         obstacle_wait_sec_ = declare_parameter<double>("obstacle_wait_sec", 4.0);
         auto_start_ = declare_parameter<bool>("auto_start", false);
         home_x_ = declare_parameter<double>("home_x", 6.5);
@@ -40,6 +43,7 @@ namespace trail_decision_making
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
         nav_client_ = rclcpp_action::create_client<NavigateToPose>(
             this, nav_action_name_);
+        follow_client_ = rclcpp_action::create_client<FollowPath>(this, "follow_path");
 
         obstacle_stop_sub_ = create_subscription<std_msgs::msg::Bool>(
             "/husky1/obstacle_stop", 10,
@@ -51,6 +55,9 @@ namespace trail_decision_making
             "/husky1/mission_status", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
         progress_pub_ = create_publisher<std_msgs::msg::Float32>(
             "/husky1/mission_progress", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
+        // The trail network as loaded, with each trail's status, so the GUI draws exactly what we drive (latched)
+        graph_pub_ = create_publisher<std_msgs::msg::String>(
+            "/husky1/mission_graph", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
         // Published continuously (water_guard ignores it once it goes stale), so no state change is missed
         follow_trail_pub_ = create_publisher<std_msgs::msg::Bool>("/husky1/follow_trail", 10);
         // Where trails were found blocked, for the GUI map (JSON list, latched)
@@ -66,6 +73,9 @@ namespace trail_decision_making
         start_srv_ = create_service<std_srvs::srv::Trigger>(
             "/husky1/start_mission",
             std::bind(&MissionManager::onStartRequest, this, _1, _2));
+
+        loadGraph(); // so the GUI can show the trail network before the mission starts
+        publishGraph();
 
         if (auto_start_)
         {
@@ -111,6 +121,9 @@ namespace trail_decision_making
         // Clear anything left over from a previous (finished or stopped) run
         route_.clear();
         current_goal_handle_.reset();
+        follow_goal_handle_.reset();
+        line_goal_sent_ = false;
+        going_around_ = false;
         inspecting_edge_ = false;
         backtracking_ = false;
         returning_home_ = false;
@@ -277,16 +290,17 @@ namespace trail_decision_making
             }
         }
 
-        // Thin the waypoints to avoid sending too many navigation goals to Nav2.
-        // Keep the first and last waypoints and thin intermediate goals to 1.2 m spacing.
-        // This is to avoid sending too many navigation goals to Nav2, which can cause it to fail or take a long time to plan.
+        // Drop near-duplicate waypoints (closer than waypoint_spacing_ to the last one kept), keeping the first and last.
+        // Recorded and hand-added waypoints are ~1 m apart and each one keeps Nav2's planner on the trail, so
+        // only duplicates go: a wider spacing (it was 1.2 m) threw away real waypoints and let the planner take
+        // its own way between the ones left, e.g. a U-turn round the tree at the start of trail 2.
         std::vector<Waypoint> thinned;
         thinned.push_back(waypoints.front());
         for (size_t index = 1; index < waypoints.size(); ++index)
         {
             const double dx = waypoints[index].x - thinned.back().x;
             const double dy = waypoints[index].y - thinned.back().y;
-            if (std::hypot(dx, dy) >= 1.2)
+            if (std::hypot(dx, dy) >= waypoint_spacing_)
             {
                 thinned.push_back(waypoints[index]);
             }
@@ -345,6 +359,11 @@ namespace trail_decision_making
                 "Navigation paused: obstacle is inside the stop range");
             return;
         }
+        if (followTrailLine())
+        {
+            sendTrailLine();
+            return;
+        }
         if (current_waypoint_index_ >= current_waypoints_.size())
         {
             onEdgeFinished();
@@ -395,7 +414,7 @@ namespace trail_decision_making
             RCLCPP_INFO(get_logger(), "Backtracking to %s: waypoint %zu/%zu (%.2f, %.2f)",
                         junctionName(current_node_id_).c_str(), current_waypoint_index_ + 1,
                         current_waypoints_.size(), waypoint.x, waypoint.y);
-            publishStatus("Edge " + std::to_string(current_edge_id_) + " blocked: returning to " +
+            publishStatus(trailName(current_edge_id_) + " blocked: returning to " +
                           junctionName(current_node_id_) + " (" + std::to_string(current_waypoint_index_ + 1) +
                           "/" + std::to_string(current_waypoints_.size()) + ")");
         }
@@ -403,15 +422,15 @@ namespace trail_decision_making
         {
             RCLCPP_INFO(get_logger(), "Sending transit goal to edge %d entry waypoint",
                         current_edge_id_);
-            publishStatus("Driving to the start of edge " + std::to_string(current_edge_id_));
+            publishStatus("Driving to the start of " + trailName(current_edge_id_, false));
         }
         else
         {
             RCLCPP_INFO(get_logger(), "Sending edge %d waypoint %zu/%zu: (%.2f, %.2f)",
                         current_edge_id_, current_waypoint_index_ + 1,
                         current_waypoints_.size(), waypoint.x, waypoint.y);
-            publishStatus(std::string(returning_home_ ? "Heading home - " : "") + "Edge " +
-                          std::to_string(current_edge_id_) +
+            publishStatus(std::string(returning_home_ ? "Heading home - " : "") +
+                          trailName(current_edge_id_) +
                           (checking_far_side_ ? " (checking the far side of the obstacle)"
                                               : inspecting_edge_ ? " (inspecting)" : "") + ": waypoint " +
                           std::to_string(current_waypoint_index_ + 1) + "/" +
@@ -447,9 +466,35 @@ namespace trail_decision_making
         // Check if the navigation was successful
         if (result.code != rclcpp_action::ResultCode::SUCCEEDED)
         {
+            handleGoalFailure(result.code);
+            return;
+        }
+
+        goal_retry_count_ = 0;
+        failed_recoveries_ = 0;
+        transit_to_edge_start_ = false;
+        going_around_ = false; // reached the waypoint we were going round an obstacle to
+        ++current_waypoint_index_;
+        // If we have not reached the last waypoint, send the next waypoint to Nav2.
+        if (current_waypoint_index_ < current_waypoints_.size())
+        {
+            sendNextWaypoint();
+        }
+        else // we have reached the last waypoint, call onEdgeFinished() to handle the end of the edge traversal.
+        {
+            RCLCPP_INFO(get_logger(), "Nav2 completed edge %d", current_edge_id_);
+            onEdgeFinished();
+        }
+    }
+
+    // A Nav2 goal (NavigateToPose or FollowPath) didn't succeed: ignore cancels (we cancel goals ourselves and
+    // whoever cancelled resends), retry aborts a few times, then treat the edge as impassable.
+    void MissionManager::handleGoalFailure(rclcpp_action::ResultCode code)
+    {
+        {
             // We only cancel goals ourselves (obstacle pause), and whoever cancelled
             // is responsible for resending, so a cancelled result is never a failure.
-            if (result.code == rclcpp_action::ResultCode::CANCELED)
+            if (code == rclcpp_action::ResultCode::CANCELED)
             {
                 RCLCPP_INFO(get_logger(), "Nav2 goal cancelled");
                 return;
@@ -457,7 +502,7 @@ namespace trail_decision_making
             // An abort is often transient (e.g. stale costmap cells around the robot
             // making the planner fail), so resend the same waypoint a few times
             // before giving up on the edge.
-            if (result.code == rclcpp_action::ResultCode::ABORTED &&
+            if (code == rclcpp_action::ResultCode::ABORTED &&
                 goal_retry_count_ < max_goal_retries_)
             {
                 ++goal_retry_count_;
@@ -479,26 +524,195 @@ namespace trail_decision_making
             }
             RCLCPP_WARN(get_logger(),
                         "Nav2 failed edge %d: action result code=%d",
-                        current_edge_id_, static_cast<int>(result.code));
+                        current_edge_id_, static_cast<int>(code));
             handleNavigationFailure();
+        }
+    }
+
+    // Trail edges (inspecting, passing through, backtracking) are driven by handing Nav2's controller (RPP) the
+    // recorded trail line itself. The robot drove these lines when the trails were mapped, but low branches put
+    // costmap obstacles within centimetres of them, so the global planner would route round (U-turns, swinging
+    // onto other trails). The planner is still used to get onto the network, round obstacles, and to the home pose.
+    bool MissionManager::followTrailLine() const
+    {
+        return follow_trail_line_ && current_edge_id_ >= 0 && !driving_to_home_pose_ &&
+               !(transit_to_edge_start_ && current_waypoint_index_ == 0) && !going_around_;
+    }
+
+    // After a trail-line goal was interrupted (obstacle, abort), move current_waypoint_index_ on to the first
+    // waypoint the robot hasn't passed yet: the end of the line segment it is closest to.
+    void MissionManager::updateWaypointIndexFromPose()
+    {
+        const auto &w = current_waypoints_;
+        if (w.size() < 2 || current_waypoint_index_ >= w.size())
+        {
+            return;
+        }
+        geometry_msgs::msg::TransformStamped tf;
+        try
+        {
+            tf = tf_buffer_->lookupTransform(global_frame_, robot_frame_, tf2::TimePointZero);
+        }
+        catch (const tf2::TransformException &)
+        {
+            return;
+        }
+        const double x = tf.transform.translation.x, y = tf.transform.translation.y;
+        size_t best = current_waypoint_index_;
+        double best_d = std::numeric_limits<double>::max();
+        for (size_t i = current_waypoint_index_ > 0 ? current_waypoint_index_ - 1 : 0; i + 1 < w.size(); ++i)
+        {
+            const double dx = w[i + 1].x - w[i].x, dy = w[i + 1].y - w[i].y;
+            const double len2 = dx * dx + dy * dy;
+            const double t = len2 > 1e-9 ? std::clamp(((x - w[i].x) * dx + (y - w[i].y) * dy) / len2, 0.0, 1.0) : 0.0;
+            const double d = std::hypot(x - w[i].x - t * dx, y - w[i].y - t * dy);
+            if (d < best_d)
+            {
+                best_d = d;
+                best = i + 1;
+            }
+        }
+        if (best < w.size() && std::hypot(x - w[best].x, y - w[best].y) < 0.3)
+        {
+            ++best; // right on that waypoint: it counts as reached
+        }
+        current_waypoint_index_ = std::max(current_waypoint_index_, best);
+    }
+
+    // One FollowPath goal from the robot along all the remaining waypoints of the edge, densified to 0.1 m
+    void MissionManager::sendTrailLine()
+    {
+        if (line_goal_sent_)
+        {
+            updateWaypointIndexFromPose();
+        }
+        if (current_waypoint_index_ >= current_waypoints_.size())
+        {
+            line_goal_sent_ = false;
+            onEdgeFinished();
+            return;
+        }
+        if (!follow_client_->wait_for_action_server(5s))
+        {
+            RCLCPP_ERROR(get_logger(), "Nav2 controller action server 'follow_path' is not available");
+            publishStatus("Stopped: Nav2 is not available");
+            mission_active_ = false;
+            return;
+        }
+        geometry_msgs::msg::TransformStamped tf;
+        try
+        {
+            tf = tf_buffer_->lookupTransform(global_frame_, robot_frame_, tf2::TimePointZero);
+        }
+        catch (const tf2::TransformException &ex)
+        {
+            RCLCPP_WARN(get_logger(), "Could not get pose before following the trail: %s", ex.what());
             return;
         }
 
+        FollowPath::Goal goal;
+        goal.controller_id = "FollowPath";
+        goal.path.header.frame_id = global_frame_;
+        goal.path.header.stamp = now();
+        auto add_pose = [&](double x, double y, double yaw)
+        {
+            geometry_msgs::msg::PoseStamped pose;
+            pose.header = goal.path.header;
+            pose.pose.position.x = x;
+            pose.pose.position.y = y;
+            tf2::Quaternion q;
+            q.setRPY(0.0, 0.0, yaw);
+            pose.pose.orientation = tf2::toMsg(q);
+            goal.path.poses.push_back(pose);
+        };
+        double px = tf.transform.translation.x, py = tf.transform.translation.y;
+        double yaw = 0.0;
+        for (size_t i = current_waypoint_index_; i < current_waypoints_.size(); ++i)
+        {
+            const Waypoint &w = current_waypoints_[i];
+            yaw = std::atan2(w.y - py, w.x - px);
+            const int steps = std::max(1, static_cast<int>(std::ceil(std::hypot(w.x - px, w.y - py) / 0.1)));
+            for (int s = 0; s < steps; ++s)
+            {
+                add_pose(px + (w.x - px) * s / steps, py + (w.y - py) * s / steps, yaw);
+            }
+            px = w.x;
+            py = w.y;
+        }
+        add_pose(px, py, yaw);
+
+        const size_t remaining = current_waypoints_.size() - current_waypoint_index_;
+        if (backtracking_)
+        {
+            RCLCPP_INFO(get_logger(), "Backtracking to %s along the trail (%zu waypoints)",
+                        junctionName(current_node_id_).c_str(), remaining);
+            publishStatus(trailName(current_edge_id_) + " blocked: returning to " + junctionName(current_node_id_));
+        }
+        else
+        {
+            RCLCPP_INFO(get_logger(), "Following edge %d along the trail from waypoint %zu/%zu",
+                        current_edge_id_, current_waypoint_index_ + 1, current_waypoints_.size());
+            publishStatus(std::string(returning_home_ ? "Heading home - " : "") + trailName(current_edge_id_) +
+                          (checking_far_side_ ? " (checking the far side of the obstacle)"
+                                              : inspecting_edge_ ? " (inspecting)" : "") +
+                          ": following the trail, " + std::to_string(remaining) + " waypoints to go");
+        }
+
+        rclcpp_action::Client<FollowPath>::SendGoalOptions options;
+        options.goal_response_callback = [this](const GoalHandleFollowPath::SharedPtr &goal_handle)
+        {
+            if (!goal_handle)
+            {
+                RCLCPP_ERROR(get_logger(), "Nav2 rejected the trail line");
+                publishStatus("Stopped: Nav2 rejected the goal");
+                mission_active_ = false;
+                return;
+            }
+            follow_goal_handle_ = goal_handle;
+        };
+        options.feedback_callback = [this](GoalHandleFollowPath::SharedPtr,
+                                           const std::shared_ptr<const FollowPath::Feedback> feedback)
+        {
+            RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
+                                 "Following edge %d: %.2f m to go along the trail, %.2f m/s",
+                                 current_edge_id_, feedback->distance_to_goal, feedback->speed);
+        };
+        options.result_callback = std::bind(&MissionManager::onTrailLineResult, this, _1);
+        line_goal_sent_ = true;
+        follow_client_->async_send_goal(goal, options);
+    }
+
+    void MissionManager::onTrailLineResult(const GoalHandleFollowPath::WrappedResult &result)
+    {
+        if (result.code != rclcpp_action::ResultCode::SUCCEEDED)
+        {
+            handleGoalFailure(result.code); // a retry resends the line from wherever the robot now is
+            return;
+        }
+        // The goal checker passed at the end of the line: the whole edge has been driven
+        line_goal_sent_ = false;
         goal_retry_count_ = 0;
         failed_recoveries_ = 0;
         transit_to_edge_start_ = false;
-        ++current_waypoint_index_;
-        // If we have not reached the last waypoint, send the next waypoint to Nav2.
-        if (current_waypoint_index_ < current_waypoints_.size())
+        current_waypoint_index_ = current_waypoints_.size();
+        RCLCPP_INFO(get_logger(), "Nav2 completed edge %d along the trail", current_edge_id_);
+        onEdgeFinished();
+    }
+
+    void MissionManager::cancelGoals()
+    {
+        if (current_goal_handle_)
         {
-            sendNextWaypoint();
+            nav_client_->async_cancel_goal(current_goal_handle_);
+            current_goal_handle_.reset();
         }
-        else // we have reached the last waypoint, call onEdgeFinished() to handle the end of the edge traversal.
+        if (follow_goal_handle_)
         {
-            RCLCPP_INFO(get_logger(), "Nav2 completed edge %d", current_edge_id_);
-            onEdgeFinished();
+            follow_client_->async_cancel_goal(follow_goal_handle_);
+            follow_goal_handle_.reset();
         }
     }
+
 
     // This method is called when we have finished traversing an edge, either because we reached the last waypoint
     // (or finished backtracking, or reached home). It updates the current node and edge state, and chooses the next edge to traverse.
@@ -542,7 +756,7 @@ namespace trail_decision_making
                 RCLCPP_INFO(get_logger(), "Edge %d is clear from the other side: the obstacle has gone", current_edge_id_);
             }
             publishProgress();
-            publishStatus("Edge " + std::to_string(current_edge_id_) + " inspected" +
+            publishStatus(trailName(current_edge_id_) + " inspected" +
                           (checking_far_side_ ? " (obstacle gone)" : "") + " - " + progressText());
             inspecting_edge_ = false;
             checking_far_side_ = false;
@@ -582,11 +796,7 @@ namespace trail_decision_making
             {
                 retry_timer_->cancel();
             }
-            if (current_goal_handle_)
-            {
-                nav_client_->async_cancel_goal(current_goal_handle_);
-                current_goal_handle_.reset();
-            }
+            cancelGoals();
             obstacle_wait_timer_ = create_wall_timer(
                 std::chrono::duration<double>(obstacle_wait_sec_), [this]()
                 {
@@ -602,6 +812,12 @@ namespace trail_decision_making
                         return;
                     }
                     RCLCPP_INFO(get_logger(), "Obstacle still present; asking Nav2 to plan around it");
+                    if (line_goal_sent_)
+                    {
+                        updateWaypointIndexFromPose(); // go round to the next waypoint the robot hasn't passed
+                        line_goal_sent_ = false;
+                    }
+                    going_around_ = true; // the planner, not the trail line, gets us past it
                     obstacle_avoidance_active_ = true;
                     goal_retry_count_ = 0;
                     sendNextWaypoint(); });
@@ -730,6 +946,12 @@ namespace trail_decision_making
     // When that is done onEdgeFinished() replans the rest of the inspection, which never uses blocked edges.
     void MissionManager::startBacktrackToJunction(const std::string &reason)
     {
+        if (line_goal_sent_)
+        {
+            updateWaypointIndexFromPose(); // which waypoints were reached before the obstacle
+            line_goal_sent_ = false;
+        }
+        going_around_ = false;
         const bool far_side_next = markCurrentEdgeBlocked();
         route_.clear(); // the old route may go through the blocked edge
         inspecting_edge_ = false;
@@ -737,7 +959,7 @@ namespace trail_decision_making
         RCLCPP_WARN(get_logger(), "%s edge %d; marked blocked, returning to %s%s",
                     reason.c_str(), current_edge_id_, junctionName(current_node_id_).c_str(),
                     far_side_next ? " (will check it from the other end later)" : "");
-        publishStatus("Edge " + std::to_string(current_edge_id_) + " blocked by an obstacle" +
+        publishStatus(trailName(current_edge_id_) + " blocked by an obstacle" +
                       (far_side_next ? "; will check it from the other end" : "") + " - " + progressText());
 
         // Waypoints before current_waypoint_index_ have been reached; drive them in reverse, ending at the junction
@@ -803,7 +1025,8 @@ namespace trail_decision_making
         for (size_t i = 0; i < blocked_points_.size(); ++i)
         {
             const auto &b = blocked_points_[i];
-            json << (i ? ", " : "") << "{\"edge\": " << b.edge << ", \"x\": " << b.x << ", \"y\": " << b.y
+            const TrailEdge *edge = graph_.getEdge(b.edge);
+            json << (i ? ", " : "") << "{\"edge\": " << b.edge << ", \"trail\": " << (edge ? edge->trail_id : -1) << ", \"x\": " << b.x << ", \"y\": " << b.y
                  << ", \"from\": \"" << junctionName(b.from_node) << "\"}";
         }
         json << "]";
@@ -858,6 +1081,53 @@ namespace trail_decision_making
         std_msgs::msg::Float32 msg;
         msg.data = static_cast<float>(graph_.explorationPercentage() * 100.0);
         progress_pub_->publish(msg);
+        publishGraph(); // trail statuses change exactly when progress does
+    }
+
+    // JSON for the GUI (map frame, metres):
+    // {"file": ..., "junctions": [{"node": 0, "junction": 1, "x": .., "y": ..}, ...],
+    //  "trails": [{"edge": 0, "trail": 1, "from": 0, "to": 1, "status": "inspected", "far_side": -1,
+    //              "waypoints": [[x, y], ...]}, ...]}
+    // "junction" is -1 for a trail's dead end; status is unvisited / inspected / blocked.
+    void MissionManager::publishGraph()
+    {
+        std::ostringstream json;
+        json << std::fixed << std::setprecision(3) << "{\"file\": \"" << waypoints_file_ << "\", \"junctions\": [";
+        const auto &nodes = graph_.nodes();
+        for (size_t i = 0; i < nodes.size(); ++i)
+        {
+            json << (i ? ", " : "") << "{\"node\": " << nodes[i].id << ", \"junction\": " << nodes[i].junction_id
+                 << ", \"x\": " << nodes[i].position.x << ", \"y\": " << nodes[i].position.y << "}";
+        }
+        json << "], \"trails\": [";
+        const auto &edges = graph_.edges();
+        for (size_t i = 0; i < edges.size(); ++i)
+        {
+            const TrailEdge &e = edges[i];
+            const char *status = e.status == EdgeStatus::INSPECTED ? "inspected"
+                                 : e.status == EdgeStatus::BLOCKED ? "blocked"
+                                                                   : "unvisited";
+            json << (i ? ", " : "") << "{\"edge\": " << e.id << ", \"trail\": " << e.trail_id << ", \"from\": "
+                 << e.from_node << ", \"to\": " << e.to_node << ", \"status\": \"" << status
+                 << "\", \"far_side\": " << e.far_side_node << ", \"waypoints\": [";
+            for (size_t w = 0; w < e.waypoints.size(); ++w)
+            {
+                json << (w ? ", " : "") << "[" << e.waypoints[w].x << ", " << e.waypoints[w].y << "]";
+            }
+            json << "]}";
+        }
+        json << "]}";
+        std_msgs::msg::String msg;
+        msg.data = json.str();
+        graph_pub_->publish(msg);
+    }
+
+    // "Trail 3" (the trail's id in the YAML file, as on the GUI map); "trail 3" when capital is false
+    std::string MissionManager::trailName(int edge_id, bool capital) const
+    {
+        const TrailEdge *edge = graph_.getEdge(edge_id);
+        const int id = (edge && edge->trail_id >= 0) ? edge->trail_id : edge_id;
+        return std::string(capital ? "Trail " : "trail ") + std::to_string(id);
     }
 
     std::string MissionManager::progressText() const

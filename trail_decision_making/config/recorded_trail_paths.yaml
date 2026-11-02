@@ -48,6 +48,9 @@ trails:
     start_junction: 2
     end_junction: 3
     waypoints:
+      - x: -1.09752
+        y: 3.52626
+        yaw: -2.85726
       - x: -2.29752
         y: 3.12626
         yaw: -2.85726

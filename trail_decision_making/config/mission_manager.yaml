@@ -10,3 +10,5 @@
     backtrack_on_obstacle: true   # true = mark a blocked trail and go back to the previous junction; false = Nav2 plans around the obstacle
     home_x: 6.5   # where the robot parks once every reachable trail is inspected
     home_y: 4.0
+    follow_trail_line: true   # true = drive trails along the recorded waypoint line (RPP only, no planner U-turns); false = Nav2 plans between waypoints
+    waypoint_spacing: 0.4     # waypoints closer than this (m) to the previous one are dropped as duplicates

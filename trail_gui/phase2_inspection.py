@@ -1,34 +1,29 @@
 """
 Phase 2 - Autonomous Inspection tab.
 
-Replays the trail network recorded in Phase 1 as a graph of nodes joined,
-in creation order, by edges (black = unvisited). The operator can seed the
-map with simulated storm obstacles, then start the autonomous inspection:
-the rover travels node to node, turning each edge green once cleared, or
-red (and backtracking) if an obstacle blocks it.
+The map shows the trail network the real mission inspects: the same trail file
+mission_manager visits (junctions J1.. and trails T1.. as numbered in that file,
+each drawn along its recorded waypoints; see mission_graph.py). mission_manager
+publishes the graph it loaded with each trail's live status, so the colours follow
+the real inspection: black = not inspected yet, green = inspected, orange =
+blocked with its far side still to check, red = blocked. Red dots mark where the
+robot found a trail blocked. Before mission_manager is running, the GUI reads the
+trail file itself so the map is there straight away.
 
 The dark circle on the map is the robot's ACTUAL position, read live from the
-simulation. The orange circle is the inspection playback: until the real robot
-is sent along the route by the navigation stack, the inspection is shown as a
-playback on the map (it does not drive the robot).
+simulation.
 
 Placing an obstacle on the map also places a real obstacle in the simulation
 (see sim_obstacles.py); "Clear Obstacles" removes them again.
 
-"Start Autonomous Inspection" also starts the REAL mission: mission_manager
-holds on launch until the GUI calls /husky1/start_mission (see
-mission_status.py), and its replies and progress appear in the log.
+"Start Autonomous Inspection" starts the REAL mission: mission_manager holds on
+launch until the GUI calls /husky1/start_mission (see mission_status.py), and its
+replies and progress appear in the log.
 
-The Robot Status section shows the real robot's state, independent of the
-playback: the obstacle detector's warn/stop flags, the mission manager's
-latest status line, and the camera snapshot taken when an obstacle stop
-activates (see mission_status.py and camera_feed.py).
-
-Swap-out point for the real system: `_arrive_at_edge_end` currently checks
-a simple point-to-line distance against manually placed obstacle markers.
-Once real perception / obstacle-detection is available, replace that check
-with the incoming detection result and keep the edge-coloring / backtrack
-/ logging logic unchanged.
+The Robot Status section shows the real robot's state: the obstacle detector's
+warn/stop flags, the mission manager's latest status line, and the camera
+snapshot taken when an obstacle stop activates (see mission_status.py and
+camera_feed.py).
 """
 import tkinter as tk
 from tkinter import ttk
@@ -36,12 +31,10 @@ from tkinter import ttk
 from camera_panel import CameraPanel
 from map_canvas import MapCanvas
 from robot_pose import STATE_COLORS
-from state import TrailState, Edge
+import mission_graph
+from state import TrailState
 
-TICK_MS = 25
 POLL_MS = 100              # how often the real robot position / simulation messages are refreshed
-TRAVEL_SPEED = 5           # cm per tick
-OBSTACLE_CLEARANCE = 18    # cm; an edge counts as blocked if an obstacle is this close to it
 
 # Real obstacle detector state (mission_status.py) -> banner text/colour and log line.
 OBSTACLE_BANNER = {
@@ -71,14 +64,8 @@ class Phase2Frame(ttk.Frame):
         self._last_mission_text = None
         self._last_snapshot_id = 0
         self._blocked_points = []
-        self.mission_visible = False
         self.placing_obstacles = False
-        self.running = False
-        self.mission_x = self.mission_y = 0
-        self.edge_index = 0
-        self.target = None
-        self.backtracking = False
-        self._display_edges = []
+        self._graph = None          # the mission's trail network (mission_graph.py)
 
         self._build_layout()
         self._poll()
@@ -145,11 +132,12 @@ class Phase2Frame(ttk.Frame):
 
         ttk.Label(right, text="Legend", font=("Arial", 11, "bold")).pack(anchor="w")
         ttk.Label(right, justify="left",
-                  text="Black = unvisited route\nGreen = clear / passed\n"
-                       "Red = blocked by obstacle\nRed X = obstacle (also in the sim)\n"
+                  text="Blue circle Jn = junction, Tn = trail (as in the trail file)\n"
+                       "Black = not inspected yet\nGreen = inspected\n"
+                       "Orange = blocked, other side still to check\nRed = blocked\n"
                        "Red dot = where the robot found a trail blocked\n"
-                       "Dark circle = robot (live from simulation)\n"
-                       "Orange circle = inspection playback").pack(anchor="w", pady=(0, 10))
+                       "Red X = obstacle you placed (also in the sim)\n"
+                       "Dark circle = robot (live from simulation)").pack(anchor="w", pady=(0, 10))
 
 
         self.obstacle_name_var = tk.StringVar(value="Detected obstacle: None")
@@ -170,25 +158,36 @@ class Phase2Frame(ttk.Frame):
         scroll.pack(side="right", fill="y")
         self.log_box.config(yscrollcommand=scroll.set)
 
-    # ---------------- called when this tab becomes active after Phase 1 ----------------
+    # ---------------- called when this tab becomes active ----------------
     def refresh_from_state(self):
-        self.state.build_edges_from_nodes()
-        display_nodes = getattr(self.state, "display_nodes", self.state.nodes)
-
-        self._display_edges = [ Edge(display_nodes[i], display_nodes[i + 1])
-            for i in range(len(display_nodes) - 1)]
-        for edge in self.state.edges:
-            edge.status = "unvisited"
-        self.edge_index = 0
-        self.running = False
-        self.backtracking = False
-        self.mission_visible = False
-        if self.state.nodes:
-            self.mission_x, self.mission_y = self.state.nodes[0].pos()
+        """Show the mission's trail network: as published by mission_manager if it is running, otherwise
+        read from the same trail file it is configured to visit."""
         self.log_box.delete(0, tk.END)
+        graph = self.status_feed.get_graph() if self.status_feed is not None else None
+        if graph is not None:
+            self._log(f"Trail network from mission_manager ({graph['file']}).")
+        else:
+            path = mission_graph.find_trail_file()
+            try:
+                if path is None:
+                    raise ValueError("no waypoints_file in trail_decision_making/config/mission_manager.yaml")
+                graph = mission_graph.load_trail_file(path)
+                self._log(f"Trail network from {path}.")
+            except (OSError, ValueError) as exc:
+                self._log(f"Can't show the trail network: {exc}")
+        self._set_graph(graph)
         self.phase_var.set("Ready - review the map, place obstacles, then start.")
         self.route_var.set("-")
-        self.progress_var.set("Exploration: 0%")
+
+    def _set_graph(self, graph):
+        self._graph = graph
+        if graph is not None:
+            inspected, blocked, todo = mission_graph.summary(graph)
+            junctions = sum(1 for n in graph["junctions"] if n["junction"] >= 0)
+            self.progress_var.set(f"{junctions} junctions, {len(graph['trails'])} trails: {inspected} inspected, "
+                                  f"{blocked} blocked, {todo} to go")
+        else:
+            self.progress_var.set("No trail network loaded")
         self._redraw()
 
     # ---------------- obstacle placement ----------------
@@ -202,7 +201,7 @@ class Phase2Frame(ttk.Frame):
                                       text="Place Obstacles (click map)")
 
     def _on_canvas_click(self, event):
-        if not self.placing_obstacles or self.running:
+        if not self.placing_obstacles:
             return
         wx, wy = self.canvas.screen_to_world(event.x, event.y)
         self.state.obstacles.append((wx, wy))
@@ -223,92 +222,27 @@ class Phase2Frame(ttk.Frame):
 
     def abort(self):
         """Stop any inspection in progress (leaving this tab for good)."""
-        self.running = False
         if self.placing_obstacles:
             self._toggle_obstacle_mode()
 
     # ---------------- inspection run ----------------
     def _start_inspection(self):
-        # Start the real robot: mission_manager holds on launch until asked (it inspects its
-        # own recorded trail graph, so this doesn't depend on the map shown here).
-        if self.status_feed is not None:
-            self._log("Asking mission_manager to start the real inspection...")
-            self.status_feed.request_start()   # the reply is logged by _poll_robot_status
-        if not self.state.edges:
-            self._log("No trail network to inspect - map a route in Phase 1 first.")
-            return
+        # mission_manager holds on launch until asked; its progress then comes back on the map colours,
+        # the Robot Status section and the log.
         if self.placing_obstacles:
             self._toggle_obstacle_mode()         # leave obstacle mode (and reset the button's look)
-        self.running = True
-        self.mission_visible = True
-        self.edge_index = 0
-        self.mission_x, self.mission_y = self.state.nodes[0].pos()
-        self.phase_var.set("Mission: Autonomous inspection in progress")
-        self._log("Inspection started.")
-        self._begin_next_edge()
-
-    def _begin_next_edge(self):
-        if self.edge_index >= len(self.state.edges):
-            self.running = False
-            self.phase_var.set("Mission complete - inspection finished.")
-            self._log("All routes inspected.")
-            self._redraw()
+        if self.status_feed is None:
+            self._log("Can't start: not connected to ROS.")
             return
-        edge = self.state.edges[self.edge_index]
-        self.route_var.set(f"Inspecting node {edge.node_a.order} -> node {edge.node_b.order}")
-        self.backtracking = False
-        self.target = edge.node_b.pos()
-        self.after(TICK_MS, self._travel_tick)
-
-    def _travel_tick(self):
-        if not self.running:
-            return
-        tx, ty = self.target
-        dx, dy = tx - self.mission_x, ty - self.mission_y
-        dist = (dx ** 2 + dy ** 2) ** 0.5
-        if dist <= TRAVEL_SPEED:
-            self.mission_x, self.mission_y = tx, ty
-            self._redraw()
-            if self.backtracking:
-                self.edge_index += 1
-                self.after(200, self._begin_next_edge)
-            else:
-                self._arrive_at_edge_end()
-            return
-        self.mission_x += dx / dist * TRAVEL_SPEED
-        self.mission_y += dy / dist * TRAVEL_SPEED
-        self._redraw()
-        self.after(TICK_MS, self._travel_tick)
-
-    def _arrive_at_edge_end(self):
-        edge = self.state.edges[self.edge_index]
-        blocked = any(edge.distance_to_point(ox, oy) <= OBSTACLE_CLEARANCE
-                       for (ox, oy) in self.state.obstacles)
-        if blocked:
-            edge.status = "blocked"
-            self._log(f"Node {edge.node_a.order} -> {edge.node_b.order}: obstacle detected, "
-                      f"marked blocked. Backtracking to node {edge.node_a.order}.")
-            self.backtracking = True
-            self.target = edge.node_a.pos()
-            self.after(200, self._travel_tick)
-        else:
-            edge.status = "clear"
-            self._log(f"Node {edge.node_a.order} -> {edge.node_b.order}: clear, route accessible.")
-            self.edge_index += 1
-            self.after(150, self._begin_next_edge)
-        self.progress_var.set(f"Exploration: {self.state.exploration_percentage():.0f}%")
-        self._redraw()
+        self._log("Asking mission_manager to start the real inspection...")
+        self.status_feed.request_start()       # the reply is logged by _poll_robot_status
+        self.phase_var.set("Mission: autonomous inspection requested")
 
     # ---------------- drawing / logging ----------------
     def _redraw(self):
-        for original, display in zip(self.state.edges, self._display_edges):
-            display.status = original.status
-        self.canvas.draw_edges(self._display_edges if self._display_edges else self.state.edges)
-        self.canvas.draw_nodes(getattr(self.state, "display_nodes", self.state.nodes))
+        self.canvas.draw_mission_graph(self._graph)
         self.canvas.draw_obstacles(self.state.obstacles)
         self.canvas.draw_blocked_points(self._blocked_points)
-        if self.mission_visible:
-            self.canvas.draw_robot(self.mission_x, self.mission_y, tag="mission", color="#ff9800")
         self._draw_real_robot()
 
     def _draw_real_robot(self):
@@ -359,6 +293,9 @@ class Phase2Frame(ttk.Frame):
             progress = self.status_feed.get_progress()
             if progress is not None:
                 self.mission_progress_var.set(f"Mission completion: {progress:.0f}%")
+            graph = self.status_feed.get_graph()
+            if graph is not None and graph != self._graph:
+                self._set_graph(graph)           # trail statuses changed (or mission_manager just started)
             blocked = self.status_feed.get_blocked_points()
             if blocked != self._blocked_points:
                 for x, y, edge, origin in blocked:

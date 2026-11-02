@@ -166,6 +166,36 @@ class MapCanvas(tk.Canvas):
             self.create_line(sx - r, sy - r, sx + r, sy + r, fill="#8b0000", width=3, tag=tag)
             self.create_line(sx - r, sy + r, sx + r, sy - r, fill="#8b0000", width=3, tag=tag)
 
+    def draw_mission_graph(self, graph, tag="mission_graph"):
+        """The trail network mission_manager inspects (mission_graph.py): each trail along its recorded
+        waypoints, coloured by status, with its trail number; junctions labelled J<id> as in the trail file.
+        Positions in the graph are metres in the map frame; the canvas works in centimetres."""
+        from mission_graph import trail_color
+        self.delete(tag)
+        if not graph:
+            return
+        for trail in graph["trails"]:
+            flat = []
+            for x, y in trail["waypoints"]:
+                flat.extend(self.world_to_screen(x * 100.0, y * 100.0))
+            self.create_line(*flat, fill=trail_color(trail), width=4, capstyle="round", joinstyle="round", tag=tag)
+            for x, y in trail["waypoints"][1:-1]:
+                sx, sy = self.world_to_screen(x * 100.0, y * 100.0)
+                self.create_oval(sx - 2, sy - 2, sx + 2, sy + 2, fill="white", outline="", tag=tag)
+            mx, my = trail["waypoints"][len(trail["waypoints"]) // 2]
+            sx, sy = self.world_to_screen(mx * 100.0, my * 100.0)
+            self.create_text(sx + 9, sy - 9, text=f"T{trail['trail']}", font=("Arial", 8, "bold"),
+                             fill="#333333", tag=tag)
+        for node in graph["junctions"]:
+            sx, sy = self.world_to_screen(node["x"] * 100.0, node["y"] * 100.0)
+            if node["junction"] >= 0:
+                self.create_oval(sx - NODE_RADIUS, sy - NODE_RADIUS, sx + NODE_RADIUS, sy + NODE_RADIUS,
+                                 fill="#3f6fb5", outline="#1c3a5e", width=2, tag=tag)
+                self.create_text(sx, sy - NODE_RADIUS - 10, text=f"J{node['junction']}",
+                                 font=("Arial", 9, "bold"), fill="#1c3a5e", tag=tag)
+            else:   # a trail's dead end
+                self.create_oval(sx - 4, sy - 4, sx + 4, sy + 4, fill="#9e9e9e", outline="#424242", tag=tag)
+
     def draw_blocked_points(self, points, tag="blocked"):
         """Red dots where the robot found a trail blocked; points are (x_cm, y_cm, ...)."""
         self.delete(tag)

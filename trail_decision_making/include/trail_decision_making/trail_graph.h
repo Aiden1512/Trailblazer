@@ -34,6 +34,7 @@ namespace trail_decision_making
     struct TrailEdge // from_node -> to_node, with waypoints in between
     {
         int id = -1; // index into TrailGraph::edges_
+        int trail_id = -1; // "id" of the trail in the YAML file (what the GUI shows), -1 if it has none
         int from_node = -1; 
         int to_node = -1;
         std::string trail_name;

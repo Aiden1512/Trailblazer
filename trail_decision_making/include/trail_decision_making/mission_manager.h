@@ -6,7 +6,9 @@
 #include <string>
 #include <vector>
 
+#include "nav2_msgs/action/follow_path.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
+#include "nav_msgs/msg/path.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/float32.hpp"
 #include "std_msgs/msg/string.hpp"
@@ -31,11 +33,16 @@ namespace trail_decision_making
     private:
         using NavigateToPose = nav2_msgs::action::NavigateToPose;
         using GoalHandleNavigateToPose = rclcpp_action::ClientGoalHandle<NavigateToPose>;
+        using FollowPath = nav2_msgs::action::FollowPath;
+        using GoalHandleFollowPath = rclcpp_action::ClientGoalHandle<FollowPath>;
 
         rclcpp_action::Client<NavigateToPose>::SharedPtr nav_client_;
+        rclcpp_action::Client<FollowPath>::SharedPtr follow_client_; // RPP along the recorded trail line
+        GoalHandleFollowPath::SharedPtr follow_goal_handle_;
         rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr obstacle_stop_sub_;
         rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_; // one-line progress for the GUI
         rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr progress_pub_; // mission completion, 0-100 %
+        rclcpp::Publisher<std_msgs::msg::String>::SharedPtr graph_pub_;     // trail network + statuses for the GUI
         rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr follow_trail_pub_; // lets water_guard's trail-keeper steer
         rclcpp::Publisher<std_msgs::msg::String>::SharedPtr blocked_points_pub_; // blocked spots for the GUI map
         rclcpp::TimerBase::SharedPtr follow_trail_timer_;
@@ -49,10 +56,18 @@ namespace trail_decision_making
             GoalHandleNavigateToPose::SharedPtr,
             const std::shared_ptr<const NavigateToPose::Feedback> feedback);
         void onNavigationResult(const GoalHandleNavigateToPose::WrappedResult &result);
+        void onTrailLineResult(const GoalHandleFollowPath::WrappedResult &result);
+        void handleGoalFailure(rclcpp_action::ResultCode code);
+        bool followTrailLine() const;
+        void sendTrailLine();
+        void updateWaypointIndexFromPose();
+        void cancelGoals();
         void onEdgeFinished();
         void obstacleStopCallback(const std_msgs::msg::Bool::SharedPtr msg);
         void publishStatus(const std::string &text);
         void publishProgress();
+        void publishGraph();
+        std::string trailName(int edge_id, bool capital = true) const;
         std::string progressText() const;
         std::string junctionName(int node_id) const;
         bool onTrailEdge() const;
@@ -112,6 +127,10 @@ namespace trail_decision_making
         int failed_recoveries_ = 0;     // Nav2 failures handled since a waypoint was last reached
         int max_failed_recoveries_ = 5; // more than this in a row and the mission stops
         double retry_delay_sec_ = 2.0;
+        double waypoint_spacing_ = 0.4; // waypoints closer than this to the previous one are dropped as duplicates
+        bool follow_trail_line_ = true; // drive trail edges along the recorded line (RPP only), not via the planner
+        bool line_goal_sent_ = false;   // a FollowPath goal for the current waypoints is (or was) in progress
+        bool going_around_ = false;     // Nav2's planner is taking us round an obstacle to the current waypoint
         bool auto_start_ = false; // start as soon as TF is up instead of waiting for /husky1/start_mission
         // a deque is used here because we will be popping from the front as we traverse edges
         std::deque<int> route_; // sequence of edge ids to traverse, in order, to reach the next uninspected edge

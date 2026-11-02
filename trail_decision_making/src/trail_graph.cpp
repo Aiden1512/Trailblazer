@@ -83,6 +83,7 @@ namespace trail_decision_making
 
                 TrailEdge edge;
                 edge.trail_name = trail["name"] ? trail["name"].as<std::string>() : "";
+                edge.trail_id = trail["id"] ? trail["id"].as<int>(-1) : -1;
 
                 for (const auto &wp : wps)
                 {

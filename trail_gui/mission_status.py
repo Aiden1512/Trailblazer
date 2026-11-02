@@ -6,6 +6,7 @@ What the real robot is doing: obstacle detection and mission progress, via ROS 2
     /husky1/mission_status      std_msgs/String  one-line mission progress         (mission_manager, latched)
     /husky1/mission_progress    std_msgs/Float32 mission completion, 0-100 %       (mission_manager, latched)
     /husky1/blocked_points      std_msgs/String  JSON list of where trails are blocked (mission_manager, latched)
+    /husky1/mission_graph       std_msgs/String  JSON trail network + trail statuses  (mission_manager, latched)
     /husky1/water_detected      std_msgs/Bool    water (blue ground) in slow range (water_guard, every camera frame)
     /husky1/water_stop          std_msgs/Bool    forward teleop blocked by water   (water_guard, every camera frame)
     /husky1/start_mission       std_srvs/Trigger starts the inspection             (mission_manager holds until called)
@@ -41,6 +42,7 @@ STOP_TOPIC = "/husky1/obstacle_stop"
 MISSION_TOPIC = "/husky1/mission_status"
 PROGRESS_TOPIC = "/husky1/mission_progress"
 BLOCKED_TOPIC = "/husky1/blocked_points"
+GRAPH_TOPIC = "/husky1/mission_graph"
 START_SERVICE = "/husky1/start_mission"
 WATER_WARN_TOPIC = "/husky1/water_detected"
 WATER_STOP_TOPIC = "/husky1/water_stop"
@@ -59,6 +61,7 @@ class MissionStatusFeed:
         self._mission_text = None
         self._mission_progress = None
         self._blocked_points = []
+        self._graph = None
         self._last_detector_time = None
         self._water_warn = False
         self._water_stop = False
@@ -99,6 +102,7 @@ class MissionStatusFeed:
             self._node.create_subscription(String, MISSION_TOPIC, self._on_mission, latched)
             self._node.create_subscription(Float32, PROGRESS_TOPIC, self._on_progress, latched)
             self._node.create_subscription(String, BLOCKED_TOPIC, self._on_blocked, latched)
+            self._node.create_subscription(String, GRAPH_TOPIC, self._on_graph, latched)
             self._start_client = self._node.create_client(Trigger, START_SERVICE)
             self._executor = SingleThreadedExecutor()
             self._executor.add_node(self._node)
@@ -175,9 +179,18 @@ class MissionStatusFeed:
         except json.JSONDecodeError:
             return
         # map frame metres -> GUI world centimetres (the map frame is lined up with the world)
-        blocked = [(p["x"] * 100.0, p["y"] * 100.0, p.get("edge"), p.get("from", "")) for p in points]
+        # trail id as in the trail file (what the map labels show); older mission_managers only sent the edge
+        blocked = [(p["x"] * 100.0, p["y"] * 100.0, p.get("trail", p.get("edge")), p.get("from", "")) for p in points]
         with self._lock:
             self._blocked_points = blocked
+
+    def _on_graph(self, msg):
+        try:
+            graph = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        with self._lock:
+            self._graph = graph
 
     def _on_front_obstacle(self, msg):
         with self._lock:
@@ -222,6 +235,12 @@ class MissionStatusFeed:
         mission_manager has started a mission."""
         with self._lock:
             return self._mission_progress
+
+    def get_graph(self):
+        """The trail network mission_manager loaded, with live trail statuses (see mission_graph.py),
+        or None until mission_manager has published it."""
+        with self._lock:
+            return self._graph
 
     def get_blocked_points(self):
         """Return [(x_cm, y_cm, edge, from_junction), ...]: where mission_manager found trails blocked."""
