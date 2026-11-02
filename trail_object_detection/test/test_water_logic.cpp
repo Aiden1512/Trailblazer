@@ -145,6 +145,22 @@ int main()
   assert(limitForward(-0.5, 0.0) == -0.5);
   assert(limitForward(0.0, 0.0) == 0.0);
 
+  // water pixels project back onto the ground where the pond is (image right = robot's right = negative left)
+  {
+    const Frame f = makeFrame(p, 1.5, 2.0, 0.8, 1.2);
+    int points = 0;
+    scanForWater(f.data.data(), f.w, f.h, f.step(), f.channels, false, p, [&](int u, int v, bool) {
+      double ahead, left;
+      assert(groundPoint(u, v, f.w, f.h, p, ahead, left));
+      assert(ahead >= 1.45 && ahead <= 2.05);
+      assert(left >= -1.25 && left <= -0.75);
+      ++points;
+    });
+    assert(points > 0);
+    double ahead, left;
+    assert(!groundPoint(0, f.h / 2 - 1, f.w, f.h, p, ahead, left)); // above the horizon
+  }
+
   std::cout << "test_water_logic: all passed\n";
   return 0;
 }

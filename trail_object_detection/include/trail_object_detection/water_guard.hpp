@@ -1,9 +1,14 @@
 #ifndef TRAIL_OBJECT_DETECTION__WATER_GUARD_HPP_
 #define TRAIL_OBJECT_DETECTION__WATER_GUARD_HPP_
 
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "geometry_msgs/msg/twist.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/image.hpp"
+#include "sensor_msgs/msg/point_cloud2.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/float32.hpp"
 
@@ -33,6 +38,9 @@
 //        /husky1/water_stop          stop: forward driving blocked    (Bool, every frame)
 //        /husky1/water_distance      nearest water ahead [m], -1 = none (Float32, every frame)
 //        /husky1/water_debug         camera image with water painted in (only while subscribed)
+//        /husky1/water_points        water seen on the ground, one point per water_cell in base_link at
+//                                    water_cloud_height (PointCloud2, every frame): Nav2's water_layer marks
+//                                    it so the planner routes round water, which the lidar can't see
 //        /husky1/trail_keeper_active trail-keeper is steering Nav2 back onto the trail (Bool, on change)
 class WaterGuard : public rclcpp::Node
 {
@@ -49,8 +57,13 @@ private:
   double forwardFactor() const;
   void enforceLimit(const char *reason);
   void publishDebug(const sensor_msgs::msg::Image &msg, int channels, bool bgr);
+  void publishWaterPoints(const std_msgs::msg::Header &image_header,
+                          const std::vector<std::pair<double, double>> &points);
 
   trail_object_detection::WaterParams params_;
+  std::string base_frame_ = "husky1_base_link";
+  double water_cell_ = 0.1;         // one cloud point per water cell this size (m)
+  double water_cloud_height_ = 0.3; // above base_link, inside the costmap's obstacle height band
   trail_object_detection::WaterGate gate_;
   double camera_timeout_;
   bool block_without_camera_;
@@ -90,6 +103,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr stop_pub_;
   rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr distance_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr water_points_pub_;
   rclcpp::TimerBase::SharedPtr watchdog_;
 };
 

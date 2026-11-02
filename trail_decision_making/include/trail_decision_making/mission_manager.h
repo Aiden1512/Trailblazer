@@ -12,6 +12,7 @@
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/float32.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_srvs/srv/set_bool.hpp"
 #include "std_srvs/srv/trigger.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "tf2_ros/buffer.h"
@@ -50,6 +51,7 @@ namespace trail_decision_making
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr pause_srv_;   // the GUI's "E-STOP" button
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr resume_srv_;  // the GUI's "Resume" button
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr home_srv_;    // the GUI's "Return Home" button
+        rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr obstacle_mode_srv_; // the GUI's obstacle mode toggle
         GoalHandleNavigateToPose::SharedPtr current_goal_handle_;
 
         // Mission control methods
@@ -64,6 +66,7 @@ namespace trail_decision_making
         bool followTrailLine() const;
         void sendTrailLine();
         void updateWaypointIndexFromPose();
+        void skipWaypointsPastObstacle();
         void cancelGoals();
         void onEdgeFinished();
         void obstacleStopCallback(const std_msgs::msg::Bool::SharedPtr msg);
@@ -82,7 +85,7 @@ namespace trail_decision_making
         void startBacktrackToJunction(const std::string &reason);
         void driveBackToJunction();
         bool markCurrentEdgeBlocked();
-        void recordBlockedPoint();
+        void recordBlockedPoint(bool avoided = false);
         void publishBlockedPoints();
         void startReturnHome();
         void sendHomeGoal();
@@ -99,6 +102,9 @@ namespace trail_decision_making
         void onReturnHomeRequest(
             const std::shared_ptr<std_srvs::srv::Trigger::Request>,
             std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+        void onObstacleModeRequest(
+            const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+            std::shared_ptr<std_srvs::srv::SetBool::Response> response);
         void haltRobot();
         void clearPause();
         void resumeDriving();
@@ -122,6 +128,7 @@ namespace trail_decision_making
             int edge = -1;
             double x = 0.0, y = 0.0; // map frame
             int from_node = -1;      // junction the robot was coming from when it found it
+            bool avoided = false;    // Nav2 went around it, so the trail is not blocked
         };
         std::vector<BlockedPoint> blocked_points_;
         double blocked_marker_ahead_ = 1.2; // obstacle is about this far ahead of base_link when the robot stops
@@ -153,6 +160,7 @@ namespace trail_decision_making
         bool follow_trail_line_ = true; // drive trail edges along the recorded line (RPP only), not via the planner
         bool line_goal_sent_ = false;   // a FollowPath goal for the current waypoints is (or was) in progress
         bool going_around_ = false;     // Nav2's planner is taking us round an obstacle to the current waypoint
+        double go_around_ahead_ = 2.5;  // going round, aim for the first waypoint at least this far (m) along the trail
         bool auto_start_ = false; // start as soon as TF is up instead of waiting for /husky1/start_mission
         // a deque is used here because we will be popping from the front as we traverse edges
         std::deque<int> route_; // sequence of edge ids to traverse, in order, to reach the next uninspected edge

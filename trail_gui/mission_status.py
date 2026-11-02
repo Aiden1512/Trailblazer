@@ -13,12 +13,13 @@ What the real robot is doing: obstacle detection and mission progress, via ROS 2
     /husky1/pause_mission       std_srvs/Trigger e-stop: robot stops where it is, mission paused
     /husky1/resume_mission      std_srvs/Trigger carry on from where the e-stop left off
     /husky1/return_home         std_srvs/Trigger skip the trails still to inspect and go home
+    /husky1/set_obstacle_mode   std_srvs/SetBool true = Nav2 plans around obstacles, false = backtrack to the junction
 
 MissionStatusFeed listens in a background thread and keeps the latest values;
 the GUI polls get() and status() so no Tk calls are made from the ROS thread.
-request_start(), request_pause(), request_resume() and request_return_home()
-ask mission_manager to act; each answer is queued in command_results as
-(ok, message) for the GUI to log.
+request_start(), request_pause(), request_resume(), request_return_home() and
+request_obstacle_mode() ask mission_manager to act; each answer is queued in
+command_results as (ok, message) for the GUI to log.
 """
 import json
 import os
@@ -34,7 +35,7 @@ try:
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
     from std_msgs.msg import Bool, Float32, String
-    from std_srvs.srv import Trigger
+    from std_srvs.srv import SetBool, Trigger
     ROS_AVAILABLE = True
     _ROS_IMPORT_ERROR = ""
 except Exception as exc:                  # normally ImportError; never let it crash the GUI
@@ -51,6 +52,7 @@ START_SERVICE = "/husky1/start_mission"
 PAUSE_SERVICE = "/husky1/pause_mission"
 RESUME_SERVICE = "/husky1/resume_mission"
 HOME_SERVICE = "/husky1/return_home"
+OBSTACLE_MODE_SERVICE = "/husky1/set_obstacle_mode"
 WATER_WARN_TOPIC = "/husky1/water_detected"
 WATER_STOP_TOPIC = "/husky1/water_stop"
 FRONT_OBSTACLE_TOPIC = "/husky1/front_obstacle"
@@ -76,7 +78,7 @@ class MissionStatusFeed:
         self._front_obstacle = "None"
         self._last_front_obstacle_time = None
         self._startup_error = ""
-        self._clients = {}                # service name -> Trigger client
+        self._clients = {}                # service name -> Trigger (or SetBool) client
         self.command_results = queue.Queue()
 
         self._stop_event = threading.Event()
@@ -112,6 +114,7 @@ class MissionStatusFeed:
             self._node.create_subscription(String, GRAPH_TOPIC, self._on_graph, latched)
             for service in (START_SERVICE, PAUSE_SERVICE, RESUME_SERVICE, HOME_SERVICE):
                 self._clients[service] = self._node.create_client(Trigger, service)
+            self._clients[OBSTACLE_MODE_SERVICE] = self._node.create_client(SetBool, OBSTACLE_MODE_SERVICE)
             self._executor = SingleThreadedExecutor()
             self._executor.add_node(self._node)
         except Exception as exc:
@@ -188,7 +191,9 @@ class MissionStatusFeed:
             return
         # map frame metres -> GUI world centimetres (the map frame is lined up with the world)
         # trail id as in the trail file (what the map labels show); older mission_managers only sent the edge
-        blocked = [(p["x"] * 100.0, p["y"] * 100.0, p.get("trail", p.get("edge")), p.get("from", "")) for p in points]
+        # avoided: Nav2 went around the obstacle, so the trail isn't blocked (still drawn, the obstacle is there)
+        blocked = [(p["x"] * 100.0, p["y"] * 100.0, p.get("trail", p.get("edge")), p.get("from", ""),
+                    p.get("avoided", False)) for p in points]
         with self._lock:
             self._blocked_points = blocked
 
@@ -214,9 +219,10 @@ class MissionStatusFeed:
         self.command_results.put((reply.success, reply.message))
 
     # ---------------- commands ----------------
-    def _request(self, service, action):
-        """Call one of mission_manager's Trigger services. Doesn't block; the
-        answer (or why it couldn't be asked) arrives in command_results."""
+    def _request(self, service, action, request=None):
+        """Call one of mission_manager's services (Trigger unless a request is
+        given). Doesn't block; the answer (or why it couldn't be asked) arrives
+        in command_results."""
         client = self._clients.get(service)
         if client is None:
             self.command_results.put((False, f"Can't {action}: ROS isn't connected. " + self._startup_error))
@@ -225,7 +231,9 @@ class MissionStatusFeed:
             self.command_results.put((False, f"Can't {action}: mission_manager isn't running "
                                              f"(nothing offering {service})."))
             return
-        client.call_async(Trigger.Request()).add_done_callback(lambda future: self._on_reply(future, action))
+        if request is None:
+            request = Trigger.Request()
+        client.call_async(request).add_done_callback(lambda future: self._on_reply(future, action))
 
     def request_start(self):
         """Ask mission_manager to start the inspection."""
@@ -242,6 +250,16 @@ class MissionStatusFeed:
     def request_return_home(self):
         """Ask mission_manager to skip the trails still to inspect and go home."""
         self._request(HOME_SERVICE, "return home")
+
+    def request_obstacle_mode(self, go_around):
+        """Tell mission_manager how to handle obstacles: True = Nav2 plans around
+        them, False = mark the trail blocked and backtrack to the junction."""
+        if not ROS_AVAILABLE:
+            self._request(OBSTACLE_MODE_SERVICE, "change the obstacle mode")   # reports why
+            return
+        request = SetBool.Request()
+        request.data = go_around
+        self._request(OBSTACLE_MODE_SERVICE, "change the obstacle mode", request)
 
     # ---------------- GUI-facing API ----------------
     def get(self):
@@ -268,7 +286,8 @@ class MissionStatusFeed:
             return self._graph
 
     def get_blocked_points(self):
-        """Return [(x_cm, y_cm, edge, from_junction), ...]: where mission_manager found trails blocked."""
+        """Return [(x_cm, y_cm, edge, from_junction, avoided), ...]: where mission_manager found obstacles on
+        trails; avoided = it went around, otherwise the trail is blocked there."""
         with self._lock:
             return list(self._blocked_points)
 

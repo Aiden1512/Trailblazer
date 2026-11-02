@@ -2,7 +2,12 @@
 
 #include <chrono>
 #include <cmath>
+#include <set>
 #include <string>
+#include <utility>
+#include <vector>
+
+#include "sensor_msgs/point_cloud2_iterator.hpp"
 
 using trail_object_detection::limitForward;
 
@@ -30,6 +35,9 @@ WaterGuard::WaterGuard()
   camera_timeout_ = declare_parameter("camera_timeout", 3.0);
   block_without_camera_ = declare_parameter("block_without_camera", true);
   gate_ = trail_object_detection::WaterGate(p);
+  base_frame_ = declare_parameter("base_frame", base_frame_);
+  water_cell_ = declare_parameter("water_cell", water_cell_);
+  water_cloud_height_ = declare_parameter("water_cloud_height", water_cloud_height_);
 
   auto &k = keeper_params_;
   trail_keeper_ = declare_parameter("trail_keeper", trail_keeper_);
@@ -97,6 +105,7 @@ WaterGuard::WaterGuard()
   stop_pub_ = create_publisher<std_msgs::msg::Bool>("/husky1/water_stop", 10);
   distance_pub_ = create_publisher<std_msgs::msg::Float32>("/husky1/water_distance", 10);
   debug_pub_ = create_publisher<sensor_msgs::msg::Image>("/husky1/water_debug", 1);
+  water_points_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/husky1/water_points", rclcpp::SensorDataQoS());
   watchdog_ = create_wall_timer(std::chrono::milliseconds(200), [this]() { checkCamera(); });
 
   RCLCPP_INFO(get_logger(), "Forwarding /husky1/cmd_vel_teleop and /husky1/cmd_vel_nav_smoothed (Nav2) -> /husky1/cmd_vel");
@@ -219,10 +228,27 @@ void WaterGuard::onImage(const sensor_msgs::msg::Image::ConstSharedPtr msg)
     return;
   }
 
+  // Every water sample, inside the corridor or not, also goes onto the ground map for Nav2 (one per cell)
+  std::set<std::pair<long, long>> cells;
+  std::vector<std::pair<double, double>> water_points;
+  const double camera_ahead = keeper_params_.camera.camera_ahead_of_sensor; // camera is this far ahead of base_link
   const auto scan = trail_object_detection::scanForWater(
       msg->data.data(), static_cast<int>(msg->width), static_cast<int>(msg->height),
-      static_cast<int>(msg->step), channels, bgr, params_);
+      static_cast<int>(msg->step), channels, bgr, params_, [&](int u, int v, bool) {
+        double ahead, left;
+        if (!trail_object_detection::groundPoint(u, v, static_cast<int>(msg->width),
+                                                  static_cast<int>(msg->height), params_, ahead, left))
+        {
+          return;
+        }
+        const double x = camera_ahead + ahead;
+        if (cells.emplace(std::lround(x / water_cell_), std::lround(left / water_cell_)).second)
+        {
+          water_points.emplace_back(x, left);
+        }
+      });
   gate_.update(scan.nearest);
+  publishWaterPoints(msg->header, water_points);
   if (trail_keeper_)
   {
     trail_view_ = trail_object_detection::viewTrail(
@@ -295,6 +321,29 @@ void WaterGuard::checkCamera()
   }
   gate_.blind();
   enforceLimit("no camera");
+}
+
+// Published every frame, empty when there is no water: the water_layer only marks, so an empty cloud changes nothing
+void WaterGuard::publishWaterPoints(const std_msgs::msg::Header &image_header,
+                                    const std::vector<std::pair<double, double>> &points)
+{
+  sensor_msgs::msg::PointCloud2 cloud;
+  cloud.header.stamp = image_header.stamp;
+  cloud.header.frame_id = base_frame_;
+  sensor_msgs::PointCloud2Modifier modifier(cloud);
+  modifier.setPointCloud2FieldsByString(1, "xyz");
+  modifier.resize(points.size());
+  sensor_msgs::PointCloud2Iterator<float> it_x(cloud, "x"), it_y(cloud, "y"), it_z(cloud, "z");
+  for (const auto &[x, y] : points)
+  {
+    *it_x = static_cast<float>(x);
+    *it_y = static_cast<float>(y);
+    *it_z = static_cast<float>(water_cloud_height_);
+    ++it_x;
+    ++it_y;
+    ++it_z;
+  }
+  water_points_pub_->publish(cloud);
 }
 
 // Water samples in the corridor painted red, outside it yellow; the stop and

@@ -170,11 +170,28 @@ local_costmap:
       footprint: '[ [0.5, 0.35], [0.5, -0.35], [-0.5, -0.35], [-0.5, 0.35] ]'
       plugins:
       - obstacle_layer
+      - water_layer
       - inflation_layer
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
         cost_scaling_factor: 3.0
         inflation_radius: 0.5
+      # Water seen by the camera (water_guard's /husky1/water_points, at z=0.3 in base_link). Water is flat so
+      # the lidar can't see it. Its own layer, marking only: the scan's clearing rays pass over water and would
+      # wipe it from obstacle_layer. The pond doesn't move, so once seen it stays.
+      water_layer:
+        plugin: nav2_costmap_2d::ObstacleLayer
+        enabled: true
+        observation_sources: water
+        water:
+          topic: /husky1/water_points  # absolute: a relative name resolves under the costmap node (/husky1/global_costmap/...)
+          data_type: PointCloud2
+          marking: true
+          clearing: false
+          min_obstacle_height: 0.0
+          max_obstacle_height: 1.0
+          obstacle_max_range: 4.0
+          obstacle_min_range: 0.0
       obstacle_layer:
         plugin: nav2_costmap_2d::ObstacleLayer
         enabled: true
@@ -219,7 +236,22 @@ global_costmap:
       plugins:
       - static_layer
       - obstacle_layer
+      - water_layer
       - inflation_layer
+      # Camera-detected water, as in the local costmap's water_layer
+      water_layer:
+        plugin: nav2_costmap_2d::ObstacleLayer
+        enabled: true
+        observation_sources: water
+        water:
+          topic: /husky1/water_points  # absolute: a relative name resolves under the costmap node (/husky1/global_costmap/...)
+          data_type: PointCloud2
+          marking: true
+          clearing: false
+          min_obstacle_height: 0.0
+          max_obstacle_height: 1.0
+          obstacle_max_range: 4.0
+          obstacle_min_range: 0.0
       obstacle_layer:
         plugin: nav2_costmap_2d::ObstacleLayer
         enabled: true

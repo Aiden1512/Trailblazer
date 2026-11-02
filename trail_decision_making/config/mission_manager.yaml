@@ -7,7 +7,8 @@
     nav_action_name: "navigate_to_pose"
     obstacle_wait_sec: 4.0
     auto_start: false   # true = start without waiting for the GUI's start button (/husky1/start_mission)
-    backtrack_on_obstacle: true   # true = mark a blocked trail and go back to the previous junction; false = Nav2 plans around the obstacle
+    backtrack_on_obstacle: true   # true = mark a blocked trail and go back to the previous junction; false = Nav2 plans around the obstacle (GUI toggle: /husky1/set_obstacle_mode)
+    go_around_ahead: 2.5          # going around, Nav2 aims for the first trail waypoint at least this far (m) ahead, past the obstacle
     home_x: 6.5   # where the robot parks once every reachable trail is inspected
     home_y: 4.0
     follow_trail_line: true   # true = drive trails along the recorded waypoint line (RPP only, no planner U-turns); false = Nav2 plans between waypoints

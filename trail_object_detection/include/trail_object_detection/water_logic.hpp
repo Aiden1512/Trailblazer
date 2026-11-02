@@ -142,6 +142,20 @@ inline int rowForDistance(double d, int width, int height, const WaterParams &p)
   return (v >= 0 && v < height) ? v : -1;
 }
 
+// Ground seen by pixel (u, v): metres ahead of the camera and to its left. False at or above the horizon.
+inline bool groundPoint(int u, int v, int width, int height, const WaterParams &p, double &ahead, double &left)
+{
+  const double f = (width / 2.0) / std::tan(p.horizontal_fov / 2.0);
+  const double below = v + 0.5 - height / 2.0;
+  if (below <= 0.0)
+  {
+    return false;
+  }
+  ahead = p.camera_height * f / below;
+  left = -(u + 0.5 - width / 2.0) * ahead / f;
+  return true;
+}
+
 // Turns the nearest-water distance of each camera frame into a forward speed
 // factor. Latches the stop until the water is beyond release_distance, so it
 // can't flicker on and off right at the edge.

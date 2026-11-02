@@ -6,8 +6,9 @@ mission_manager visits (junctions J1.. and trails T1.. as numbered in that file,
 each drawn along its recorded waypoints; see mission_graph.py). mission_manager
 publishes the graph it loaded with each trail's live status, so the colours follow
 the real inspection: black = not inspected yet, green = inspected, orange =
-blocked with its far side still to check, red = blocked. Red dots mark where the
-robot found a trail blocked. Before mission_manager is running, the GUI reads the
+blocked with its far side still to check, red = blocked. Red dots mark obstacles the
+robot found on a trail, whether it was blocked or went around them. Before
+mission_manager is running, the GUI reads the
 trail file itself so the map is there straight away.
 
 The dark circle on the map is the robot's ACTUAL position, read live from the
@@ -21,6 +22,12 @@ launch until the GUI calls /husky1/start_mission (see mission_status.py), and it
 replies and progress appear in the log. Once it is running, "E-STOP" stops the
 robot where it is and holds the mission, "Resume" carries on from there, and
 "Return Home" skips the trails still to inspect and drives home along the trails.
+
+The obstacle mode button chooses what mission_manager does when an obstacle
+blocks a trail: "Backtrack" (the default) marks the trail blocked and goes back
+to the previous junction; "Go Around" has Nav2 replan around the obstacle and
+carry on along the trail, backtracking only if Nav2 can't get past. It can be
+changed at any time and applies from the next obstacle.
 
 The Robot Status section shows the real robot's state: the obstacle detector's
 warn/stop flags, the mission manager's latest status line, and the camera
@@ -67,7 +74,8 @@ class Phase2Frame(ttk.Frame):
         self._last_snapshot_id = 0
         self._blocked_points = []
         self.placing_obstacles = False
-        self._graph = None          # the mission's trail network (mission_graph.py)
+        self.go_around = False      # obstacle mode: False = backtrack to the junction (default), True = Nav2 goes round
+        self._graph = None         # the mission's trail network (mission_graph.py)
 
         self._build_layout()
         self._poll()
@@ -111,6 +119,10 @@ class Phase2Frame(ttk.Frame):
                   activebackground="#1b5e20", activeforeground="white", **button_opts).pack(side="left", padx=6)
         tk.Button(mission_controls, text="Return Home", command=self._return_home, bg="#1565c0", fg="white",
                   activebackground="#0d47a1", activeforeground="white", **button_opts).pack(side="left")
+        self.obstacle_mode_btn = tk.Button(mission_controls, command=self._toggle_obstacle_mode_setting,
+                                           fg="white", activeforeground="white", **button_opts)
+        self.obstacle_mode_btn.pack(side="right")
+        self._show_obstacle_mode()
 
         right = ttk.Frame(main)
         right.pack(side="left", fill="y", padx=(14, 0))
@@ -150,7 +162,7 @@ class Phase2Frame(ttk.Frame):
                   text="Blue circle Jn = junction, Tn = trail (as in the trail file)\n"
                        "Black = not inspected yet\nGreen = inspected\n"
                        "Orange = blocked, other side still to check\nRed = blocked\n"
-                       "Red dot = where the robot found a trail blocked\n"
+                       "Red dot = obstacle found on a trail (blocked, or gone around)\n"
                        "Red X = obstacle you placed (also in the sim)\n"
                        "Dark circle = robot (live from simulation)").pack(anchor="w", pady=(0, 10))
 
@@ -248,6 +260,7 @@ class Phase2Frame(ttk.Frame):
             self._log("Can't start: not connected to ROS.")
             return
         self._log("Asking mission_manager to start the real inspection...")
+        self.status_feed.request_obstacle_mode(self.go_around)   # in case mission_manager restarted since it was set
         self.status_feed.request_start()       # the reply is logged by _poll_robot_status
         self.phase_var.set("Mission: autonomous inspection requested")
 
@@ -277,6 +290,24 @@ class Phase2Frame(ttk.Frame):
         self._log("Asking mission_manager to skip the remaining trails and return home...")
         self.status_feed.request_return_home()
         self.phase_var.set("Mission: return home requested")
+
+    def _toggle_obstacle_mode_setting(self):
+        self.go_around = not self.go_around
+        self._show_obstacle_mode()
+        if self.status_feed is None:
+            self._log("Obstacle mode will be sent when connected to ROS.")
+            return
+        self._log("Asking mission_manager to " + ("go around obstacles with Nav2..." if self.go_around
+                                                  else "backtrack from obstacles to the junction..."))
+        self.status_feed.request_obstacle_mode(self.go_around)
+
+    def _show_obstacle_mode(self):
+        if self.go_around:
+            self.obstacle_mode_btn.config(text="Obstacles: Go Around (Nav2)", bg="#6a1b9a",
+                                          activebackground="#4a148c")
+        else:
+            self.obstacle_mode_btn.config(text="Obstacles: Backtrack", bg="#546e7a",
+                                          activebackground="#37474f")
 
     # ---------------- drawing / logging ----------------
     def _redraw(self):
@@ -338,8 +369,13 @@ class Phase2Frame(ttk.Frame):
                 self._set_graph(graph)           # trail statuses changed (or mission_manager just started)
             blocked = self.status_feed.get_blocked_points()
             if blocked != self._blocked_points:
-                for x, y, edge, origin in blocked:
-                    if all((x, y) != (bx, by) for bx, by, *_ in self._blocked_points):
+                for x, y, edge, origin, avoided in blocked:
+                    if (x, y, edge, origin, avoided) in self._blocked_points:
+                        continue                 # already logged
+                    if avoided:
+                        self._log(f"Obstacle on trail {edge} at ({x / 100:.1f}, {y / 100:.1f}) m, "
+                                  f"found coming from {origin}: going around it.")
+                    else:
                         self._log(f"Trail {edge} blocked at ({x / 100:.1f}, {y / 100:.1f}) m, "
                                   f"found coming from {origin}.")
                 self._blocked_points = blocked

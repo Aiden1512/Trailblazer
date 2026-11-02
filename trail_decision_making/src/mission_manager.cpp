@@ -37,6 +37,7 @@ namespace trail_decision_making
         // true = mark the trail blocked and go back to the previous junction; false = let Nav2 plan around.
         // Read each time an obstacle is handled, so it can be changed live with `ros2 param set`.
         declare_parameter<bool>("backtrack_on_obstacle", true);
+        go_around_ahead_ = declare_parameter<double>("go_around_ahead", 2.5);
 
         // Initialize TF buffer and listener, and the navigation action client
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
@@ -83,6 +84,10 @@ namespace trail_decision_making
         home_srv_ = create_service<std_srvs::srv::Trigger>(
             "/husky1/return_home",
             std::bind(&MissionManager::onReturnHomeRequest, this, _1, _2));
+        // The GUI's obstacle mode toggle: true = Nav2 plans around obstacles, false = backtrack (the default)
+        obstacle_mode_srv_ = create_service<std_srvs::srv::SetBool>(
+            "/husky1/set_obstacle_mode",
+            std::bind(&MissionManager::onObstacleModeRequest, this, _1, _2));
 
         loadGraph(); // so the GUI can show the trail network before the mission starts
         publishGraph();
@@ -200,6 +205,21 @@ namespace trail_decision_making
         resumeDriving();
         response->success = true;
         response->message = "Mission resumed";
+    }
+
+    // The GUI's obstacle mode toggle. Only sets backtrack_on_obstacle, which is read each time an obstacle is
+    // handled, so it applies from the next obstacle (or the one being waited on). Going around, if Nav2 still
+    // can't get past, the trail is marked blocked and we backtrack anyway (handleNavigationFailure).
+    void MissionManager::onObstacleModeRequest(
+        const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+        std::shared_ptr<std_srvs::srv::SetBool::Response> response)
+    {
+        set_parameter(rclcpp::Parameter("backtrack_on_obstacle", !request->data));
+        response->success = true;
+        response->message = request->data
+                                ? "Obstacle mode: Nav2 plans around obstacles (backtracks only if it can't get past)"
+                                : "Obstacle mode: mark the trail blocked and backtrack to the previous junction";
+        RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
     }
 
     // The GUI's Return Home: skip every trail still to inspect and follow the trails home from here.
@@ -808,6 +828,39 @@ namespace trail_decision_making
         current_waypoint_index_ = std::max(current_waypoint_index_, best);
     }
 
+    // Going round an obstacle: the next waypoint is usually less than a metre ahead, short of the obstacle (which
+    // is about blocked_marker_ahead_ in front when we stop), so Nav2 would count it reached at once and the trail
+    // line would lead straight back into the obstacle. Aim for the first waypoint at least go_around_ahead_
+    // further along the trail instead, so the planner has to take us past it.
+    void MissionManager::skipWaypointsPastObstacle()
+    {
+        auto &w = current_waypoints_;
+        if (driving_to_home_pose_ || (transit_to_edge_start_ && current_waypoint_index_ == 0) ||
+            current_waypoint_index_ >= w.size())
+        {
+            return;
+        }
+        geometry_msgs::msg::TransformStamped tf;
+        try
+        {
+            tf = tf_buffer_->lookupTransform(global_frame_, robot_frame_, tf2::TimePointZero);
+        }
+        catch (const tf2::TransformException &)
+        {
+            return;
+        }
+        size_t i = current_waypoint_index_;
+        double along = std::hypot(w[i].x - tf.transform.translation.x, w[i].y - tf.transform.translation.y);
+        while (along < go_around_ahead_ && i + 1 < w.size())
+        {
+            along += std::hypot(w[i + 1].x - w[i].x, w[i + 1].y - w[i].y);
+            ++i;
+        }
+        RCLCPP_INFO(get_logger(), "Going around: aiming for waypoint %zu/%zu, %.1f m along the trail",
+                    i + 1, w.size(), along);
+        current_waypoint_index_ = i;
+    }
+
     // One FollowPath goal from the robot along all the remaining waypoints of the edge, densified to 0.1 m
     void MissionManager::sendTrailLine()
     {
@@ -1085,6 +1138,8 @@ namespace trail_decision_making
                         updateWaypointIndexFromPose(); // go round to the next waypoint the robot hasn't passed
                         line_goal_sent_ = false;
                     }
+                    recordBlockedPoint(true); // still facing it: mark it on the GUI map before turning away
+                    skipWaypointsPastObstacle();
                     going_around_ = true; // the planner, not the trail line, gets us past it
                     obstacle_avoidance_active_ = true;
                     goal_retry_count_ = 0;
@@ -1132,7 +1187,8 @@ namespace trail_decision_making
                !driving_to_home_pose_ &&
                !(transit_to_edge_start_ && current_waypoint_index_ == 0) &&
                !obstacle_pause_active_ &&
-               !obstacle_avoidance_active_;
+               !obstacle_avoidance_active_ &&
+               !going_around_;
     }
 
     // Obstacles are only backtracked from on a trail edge, and only in backtrack mode;
@@ -1267,8 +1323,10 @@ namespace trail_decision_making
         return first_time;
     }
 
-    // The obstacle is about blocked_marker_ahead_ in front of the robot when it stops for it
-    void MissionManager::recordBlockedPoint()
+    // The obstacle is about blocked_marker_ahead_ in front of the robot when it stops for it. avoided: Nav2 is
+    // going around it rather than the trail being blocked. An obstacle already marked on this edge (stopped for
+    // again while going round, or going round failed and we backtrack) keeps its one marker; blocked wins.
+    void MissionManager::recordBlockedPoint(bool avoided)
     {
         try
         {
@@ -1280,8 +1338,19 @@ namespace trail_decision_making
             point.x = tf.transform.translation.x + blocked_marker_ahead_ * std::cos(yaw);
             point.y = tf.transform.translation.y + blocked_marker_ahead_ * std::sin(yaw);
             point.from_node = current_node_id_;
-            blocked_points_.push_back(point);
-            RCLCPP_INFO(get_logger(), "Edge %d blocked at (%.2f, %.2f), coming from %s", point.edge, point.x, point.y,
+            point.avoided = avoided;
+            const auto same = std::find_if(blocked_points_.begin(), blocked_points_.end(), [&](const BlockedPoint &b)
+                                           { return b.edge == point.edge && std::hypot(b.x - point.x, b.y - point.y) < 1.5; });
+            if (same != blocked_points_.end())
+            {
+                same->avoided = same->avoided && avoided;
+            }
+            else
+            {
+                blocked_points_.push_back(point);
+            }
+            RCLCPP_INFO(get_logger(), "Edge %d %s at (%.2f, %.2f), coming from %s", point.edge,
+                        avoided ? "has an obstacle (going around it)" : "blocked", point.x, point.y,
                         junctionName(point.from_node).c_str());
             publishBlockedPoints();
         }
@@ -1292,7 +1361,8 @@ namespace trail_decision_making
         }
     }
 
-    // JSON list for the GUI: [{"edge": 2, "x": -5.1, "y": -1.2, "from": "junction 3"}, ...] in the map frame (metres)
+    // JSON list for the GUI: [{"edge": 2, "x": -5.1, "y": -1.2, "from": "junction 3", "avoided": false}, ...]
+    // in the map frame (metres)
     void MissionManager::publishBlockedPoints()
     {
         std::ostringstream json;
@@ -1302,7 +1372,8 @@ namespace trail_decision_making
             const auto &b = blocked_points_[i];
             const TrailEdge *edge = graph_.getEdge(b.edge);
             json << (i ? ", " : "") << "{\"edge\": " << b.edge << ", \"trail\": " << (edge ? edge->trail_id : -1) << ", \"x\": " << b.x << ", \"y\": " << b.y
-                 << ", \"from\": \"" << junctionName(b.from_node) << "\"}";
+                 << ", \"from\": \"" << junctionName(b.from_node) << "\", \"avoided\": " << (b.avoided ? "true" : "false")
+                 << "}";
         }
         json << "]";
         std_msgs::msg::String msg;
