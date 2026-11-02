@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <limits>
+#include <string>
 
 using trail_object_detection::PointClass;
 using trail_object_detection::ZoneCounts;
@@ -31,12 +32,35 @@ GroundFilter::GroundFilter() : Node("ground_filter")
   warn_debounce_ = trail_object_detection::Debouncer(on_frames, off_frames);
   stop_debounce_ = trail_object_detection::Debouncer(on_frames, off_frames);
 
+  auto &t = trail_params_;
+  trail_check_ = declare_parameter("trail_check", trail_check_);
+  trail_image_max_age_ = declare_parameter("trail_image_max_age", trail_image_max_age_);
+  trail_judge_half_width_ = declare_parameter("trail_judge_half_width", trail_judge_half_width_);
+  odom_frame_ = declare_parameter("odom_frame", odom_frame_);
+  trail_memory_ = trail_object_detection::TrailMemory(
+      0.2, declare_parameter("trail_memory_sec", 120.0));
+  tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
+  tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+  t.camera_height = declare_parameter("camera_height", t.camera_height);
+  t.horizontal_fov = declare_parameter("horizontal_fov", t.horizontal_fov);
+  t.camera_ahead_of_sensor = declare_parameter("camera_ahead_of_sensor", t.camera_ahead_of_sensor);
+  t.hue_min = declare_parameter("trail_hue_min", t.hue_min);
+  t.hue_max = declare_parameter("trail_hue_max", t.hue_max);
+  t.sat_min = declare_parameter("trail_sat_min", t.sat_min);
+  t.val_min = declare_parameter("trail_val_min", t.val_min);
+  t.min_trail_fraction = declare_parameter("min_trail_fraction", t.min_trail_fraction);
+
   RCLCPP_INFO(
       get_logger(),
       "Perception: obstacle = %.2f m above ground (+%.2f/m) up to z=%.2f (robot top); "
       "corridor +-%.2f m, stop %.2f m / warn %.2f m ahead of bumper; need %d/%d pts, debounce %d on/%d off",
       p.ground_margin, p.slope_tolerance, p.overhead_z, p.corridor_half_width,
       p.stop_distance, p.warn_distance, min_stop_points_, min_warn_points_, on_frames, off_frames);
+  RCLCPP_INFO(
+      get_logger(),
+      "Trail check %s: obstacles only count if the ground in front of them is trail colour "
+      "(hue %.0f-%.0f deg, >= %.0f%% of the patch); LiDAR only when the camera can't see it",
+      trail_check_ ? "ON" : "OFF", t.hue_min, t.hue_max, t.min_trail_fraction * 100.0);
 
   sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
       "/husky1/scan/points", 10,
@@ -55,6 +79,25 @@ GroundFilter::GroundFilter() : Node("ground_filter")
             get_logger(), "Published obstacle snapshot (%ux%u) on /husky1/obstacle_image",
             msg->width, msg->height);
       });
+  trail_camera_sub_ = create_subscription<sensor_msgs::msg::Image>(
+      "/husky1/camera/image", rclcpp::SensorDataQoS(),
+      [this](sensor_msgs::msg::Image::ConstSharedPtr msg) {
+        const std::string &enc = msg->encoding;
+        if (enc != "rgb8" && enc != "bgr8" && enc != "rgba8" && enc != "bgra8")
+        {
+          RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000,
+                                "Trail check: unsupported image encoding '%s'", enc.c_str());
+          return;
+        }
+        if (msg->data.size() < static_cast<std::size_t>(msg->step) * msg->height)
+        {
+          return;
+        }
+        trail_channels_ = enc.size() == 5 ? 4 : 3; // "rgba8"/"bgra8" vs "rgb8"/"bgr8"
+        trail_bgr_ = enc[0] == 'b';
+        trail_image_ = msg;
+      });
+  trail_debug_pub_ = create_publisher<sensor_msgs::msg::Image>("/husky1/trail_check_debug", 1);
   pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/husky1/scan/points_filtered", 10);
   obstacle_image_pub_ = create_publisher<sensor_msgs::msg::Image>(
       "/husky1/obstacle_image", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
@@ -79,7 +122,35 @@ void GroundFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
   const float nan = std::numeric_limits<float>::quiet_NaN();
   ZoneCounts counts;
   std::size_t kept = 0;
+  std::size_t off_trail = 0;
+  std::vector<std::pair<float, float>> zone_points; // obstacle points inside the warn/stop corridor
   obstacle_scan_.reset();
+
+  // Camera verdicts are remembered in the odom frame; without TF the memory just isn't used this frame
+  const rclcpp::Time stamp(msg->header.stamp, get_clock()->get_clock_type());
+  const double now = stamp.seconds();
+  const bool use_camera = trail_check_ && trailImageUsable(stamp);
+  bool use_memory = false;
+  if (trail_check_)
+  {
+    try
+    {
+      const auto tf = tf_buffer_->lookupTransform(odom_frame_, msg->header.frame_id, tf2::TimePointZero);
+      const auto &q = tf.transform.rotation;
+      const double yaw = std::atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+      odom_x_ = tf.transform.translation.x;
+      odom_y_ = tf.transform.translation.y;
+      odom_cos_ = std::cos(yaw);
+      odom_sin_ = std::sin(yaw);
+      use_memory = true;
+    }
+    catch (const tf2::TransformException &ex)
+    {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
+                           "Trail check: no TF %s -> %s, so no memory of judged obstacles: %s",
+                           msg->header.frame_id.c_str(), odom_frame_.c_str(), ex.what());
+    }
+  }
 
   for (; ix != ix.end(); ++ix, ++iy, ++iz)
   {
@@ -88,8 +159,30 @@ void GroundFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 
     if (c == PointClass::Obstacle)
     {
-      trail_object_detection::countPoint(x, y, params_, counts);
-      obstacle_scan_.add(x, y);
+      ZoneCounts point;
+      trail_object_detection::countPoint(x, y, params_, point);
+      if (point.warn > 0) // in the corridor ahead: only counts if it is on the trail (or nobody can tell)
+      {
+        zone_points.emplace_back(x, y);
+        if (isOffTrail(x, y, use_camera, use_memory, now))
+        {
+          ++off_trail;
+        }
+        else
+        {
+          counts.warn += point.warn;
+          counts.stop += point.stop;
+        }
+      }
+      else if (use_camera && use_memory && x > 0.0f &&
+               x <= params_.sensor_to_front + params_.warn_distance &&
+               std::fabs(y) <= trail_judge_half_width_)
+      {
+        // Beside the corridor: judge it now, while the camera can see it, in case a turn swings it into
+        // the corridor at close range where the camera can't see the ground in front of it any more.
+        isOffTrail(x, y, use_camera, use_memory, now);
+      }
+      obstacle_scan_.add(x, y); // Nav2 still sees everything, so it steers clear of off-trail obstacles
       ++kept;
     }
     else if (c == PointClass::Overhead && z <= cloud_max_z_)
@@ -149,10 +242,95 @@ void GroundFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     RCLCPP_WARN(get_logger(), "Obstacle stop %s (pts=%zu)", stop ? "ACTIVE" : "CLEAR", counts.stop);
     previous_stop_ = stop;
   }
+  if (off_trail > 0 && counts.stop < static_cast<std::size_t>(min_stop_points_))
+  {
+    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,
+                         "Ignoring %zu obstacle points ahead: they are beside the trail, not on it", off_trail);
+  }
   RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
-                        "kept=%zu warn_pts=%zu stop_pts=%zu", kept, counts.warn, counts.stop);
+                        "kept=%zu warn_pts=%zu stop_pts=%zu off_trail=%zu",
+                        kept, counts.warn, counts.stop, off_trail);
+  if (use_camera && trail_debug_pub_->get_subscription_count() > 0)
+  {
+    publishTrailDebug(zone_points);
+  }
+  if (use_memory)
+  {
+    trail_memory_.prune(now);
+  }
 
   pub_->publish(filtered);
+}
+
+// A camera frame taken close enough to this LiDAR scan to judge it by. Compared by message stamps (sim
+// time): a slow sim leaves long wall-clock gaps between camera frames, but the robot hasn't moved in them.
+bool GroundFilter::trailImageUsable(const rclcpp::Time &scan_stamp)
+{
+  if (!trail_image_)
+  {
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
+                         "Trail check: no frame on /husky1/camera/image yet; using LiDAR only");
+    return false;
+  }
+  const rclcpp::Time image_stamp(trail_image_->header.stamp, scan_stamp.get_clock_type());
+  const double age = std::fabs((scan_stamp - image_stamp).seconds());
+  if (age > trail_image_max_age_)
+  {
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
+                         "Trail check: camera frame is %.1f s from the LiDAR scan; using remembered verdicts / LiDAR only",
+                         age);
+    return false;
+  }
+  return true;
+}
+
+// Is the obstacle point (LiDAR frame) beside the trail? The camera decides when it can see the ground in
+// front of the point, and its verdict is remembered; otherwise the remembered verdict for that spot is used.
+// With neither, the point counts as on the trail, so the robot still stops for it.
+bool GroundFilter::isOffTrail(float x, float y, bool use_camera, bool use_memory, double now)
+{
+  const double ox = odom_x_ + odom_cos_ * x - odom_sin_ * y;
+  const double oy = odom_y_ + odom_sin_ * x + odom_cos_ * y;
+  if (use_camera)
+  {
+    const auto verdict = checkOnTrail(x, y);
+    if (verdict != trail_object_detection::TrailCheck::Unknown)
+    {
+      if (use_memory)
+      {
+        trail_memory_.mark(ox, oy, verdict == trail_object_detection::TrailCheck::OnTrail, now);
+      }
+      return verdict == trail_object_detection::TrailCheck::OffTrail;
+    }
+  }
+  return use_memory && trail_memory_.offTrail(ox, oy, now);
+}
+
+trail_object_detection::TrailCheck GroundFilter::checkOnTrail(float x, float y)
+{
+  return trail_object_detection::checkOnTrail(
+      trail_image_->data.data(), static_cast<int>(trail_image_->width), static_cast<int>(trail_image_->height),
+      static_cast<int>(trail_image_->step), trail_channels_, trail_bgr_, x, y, trail_params_);
+}
+
+// Checked ground samples painted green (trail colour) or magenta (not trail).
+void GroundFilter::publishTrailDebug(const std::vector<std::pair<float, float>> &points)
+{
+  sensor_msgs::msg::Image out = *trail_image_;
+  const int ri = trail_bgr_ ? 2 : 0, bi = trail_bgr_ ? 0 : 2;
+  for (const auto &[x, y] : points)
+  {
+    trail_object_detection::checkOnTrail(
+        trail_image_->data.data(), static_cast<int>(out.width), static_cast<int>(out.height),
+        static_cast<int>(out.step), trail_channels_, trail_bgr_, x, y, trail_params_,
+        [&](int u, int v, bool is_trail) {
+          std::uint8_t *px = out.data.data() + static_cast<std::size_t>(v) * out.step + u * trail_channels_;
+          px[ri] = is_trail ? 0 : 255;
+          px[1] = is_trail ? 255 : 0;
+          px[bi] = is_trail ? 0 : 255;
+        });
+  }
+  trail_debug_pub_->publish(out);
 }
 
 int main(int argc, char **argv)

@@ -153,11 +153,19 @@ The environment needs `ultralytics`, `cv2`, ROS 2 Python packages, and `cv_bridg
 
 The YOLO node subscribes to `/husky1/camera/image` and publishes annotated frames to `/husky1/yolo_image`. With the obstacle-name changes in place, it also publishes the selected class to `/husky1/front_obstacle`.
 
-### 4. Start LiDAR obstacle detection
+### 4. LiDAR obstacle detection
+
+`ground_filter` is started by the simulation launch file, so there is nothing to run here. Don't start a
+second copy with `ros2 run`: both would publish `/husky1/obstacle_stop`. To check it is running:
 
 ```bash
-ros2 run trail_object_detection ground_filter
+ros2 node list | grep ground_filter
 ```
+
+The LiDAR finds obstacles and the camera checks whether each one is on the (brown) trail; obstacles on the
+grass beside the trail are ignored for stopping (Nav2 still avoids them). Set `trail_check:=false` on the
+node to go back to LiDAR only. To see what it checks:
+`ros2 run rqt_image_view rqt_image_view /husky1/trail_check_debug` (green = trail, magenta = not trail).
 
 The detector publishes:
 

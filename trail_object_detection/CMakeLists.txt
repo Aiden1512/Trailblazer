@@ -10,11 +10,13 @@ find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(tf2 REQUIRED)
 
 include_directories(include)
 
 add_executable(ground_filter src/ground_filter.cpp)
-ament_target_dependencies(ground_filter rclcpp sensor_msgs std_msgs)
+ament_target_dependencies(ground_filter rclcpp sensor_msgs std_msgs tf2_ros tf2)
 
 add_executable(water_guard src/water_guard.cpp)
 ament_target_dependencies(water_guard rclcpp geometry_msgs sensor_msgs std_msgs)
@@ -29,6 +31,8 @@ if(BUILD_TESTING)
   add_test(NAME test_scenarios COMMAND test_scenarios)
   add_executable(test_water_logic test/test_water_logic.cpp)
   add_test(NAME test_water_logic COMMAND test_water_logic)
+  add_executable(test_trail_logic test/test_trail_logic.cpp)
+  add_test(NAME test_trail_logic COMMAND test_trail_logic)
 endif()
 
 ament_package()
