@@ -26,6 +26,8 @@
 //        /husky1/cmd_vel_nav_smoothed  Nav2 commands (Phase 2 autonomous run)
 //        /husky1/follow_trail        mission_manager: trail-keeper may steer (Bool, 5 Hz)
 //        /husky1/obstacle_detected   ground_filter warn: trail-keeper stands down near obstacles
+//        /husky1/obstacle_near       ground_filter: ANY obstacle close ahead -> trail-keeper stands down
+//        /husky1/collision_stop      ground_filter: obstacle at the bumper -> forward driving blocked
 //   out: /husky1/cmd_vel             commands with forward speed limited
 //        /husky1/water_detected      warn: water inside slow_distance (Bool, every frame)
 //        /husky1/water_stop          stop: forward driving blocked    (Bool, every frame)
@@ -44,6 +46,7 @@ private:
   bool trailKeeperAllowed();
   void checkCamera();
   void publishGated();
+  double forwardFactor() const;
   void enforceLimit(const char *reason);
   void publishDebug(const sensor_msgs::msg::Image &msg, int channels, bool bgr);
 
@@ -72,12 +75,15 @@ private:
   rclcpp::Time obstacle_time_;
   bool have_obstacle_time_ = false;
   bool keeper_active_ = false;
+  bool collision_stop_ = false;
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr camera_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr nav_cmd_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr follow_trail_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr obstacle_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr obstacle_near_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr collision_sub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr keeper_active_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr warn_pub_;

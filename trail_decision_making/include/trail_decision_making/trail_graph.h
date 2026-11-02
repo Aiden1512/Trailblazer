@@ -39,6 +39,9 @@ namespace trail_decision_making
         std::string trail_name;
         std::vector<Waypoint> waypoints; // ordered from from_node to to_node
         EdgeStatus status{EdgeStatus::UNINSPECTED}; 
+        // BLOCKED part way through inspecting it: the end it still has to be inspected from, up to the
+        // obstacle (-1: nothing left to check, e.g. checked from both ends)
+        int far_side_node = -1;
     };
 
     struct ClosestEdgeResult
@@ -69,8 +72,12 @@ namespace trail_decision_making
         // Returns -1 if the graph is empty
         int findNearestNode(double x, double y) const;
 
-        // (inspected + blocked) / total, 0.0 if graph is empty
+        // Share of trail checked, 0.0 if graph is empty: inspected and fully checked blocked edges count 1,
+        // blocked edges still to be checked from their far side count 0.5
         double explorationPercentage() const;
+
+        void setFarSideNode(int edge_id, int node_id);
+        size_t pendingFarSides() const; // blocked edges whose far side hasn't been checked yet
 
         size_t countEdges(EdgeStatus status) const;
 

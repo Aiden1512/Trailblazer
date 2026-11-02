@@ -191,16 +191,38 @@ namespace trail_decision_making
         {
             return 0.0;
         }
-        size_t done = 0;
+        double done = 0.0;
         for (const auto &e : edges_)
         {
-            if (e.status != EdgeStatus::UNINSPECTED)
+            if (e.status == EdgeStatus::INSPECTED)
             {
-                ++done;
+                done += 1.0;
+            }
+            else if (e.status == EdgeStatus::BLOCKED)
+            {
+                done += e.far_side_node >= 0 ? 0.5 : 1.0; // only one side of the obstacle checked so far
             }
         }
-        // return the fraction of edges that are inspected or blocked (important for UI)
-        return static_cast<double>(done) / static_cast<double>(edges_.size());
+        // return the fraction of the trail network that has been checked (important for UI)
+        return done / static_cast<double>(edges_.size());
+    }
+
+    void TrailGraph::setFarSideNode(int edge_id, int node_id)
+    {
+        for (auto &e : edges_)
+        {
+            if (e.id == edge_id)
+            {
+                e.far_side_node = node_id;
+                return;
+            }
+        }
+    }
+
+    size_t TrailGraph::pendingFarSides() const
+    {
+        return static_cast<size_t>(std::count_if(edges_.begin(), edges_.end(), [](const TrailEdge &e)
+                                                 { return e.status == EdgeStatus::BLOCKED && e.far_side_node >= 0; }));
     }
 
     // Number of edges with the given status
@@ -216,6 +238,7 @@ namespace trail_decision_making
         for (auto &e : edges_)
         {
             e.status = EdgeStatus::UNINSPECTED;
+            e.far_side_node = -1;
         }
     }
 

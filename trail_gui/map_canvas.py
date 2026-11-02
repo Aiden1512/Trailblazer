@@ -166,6 +166,14 @@ class MapCanvas(tk.Canvas):
             self.create_line(sx - r, sy - r, sx + r, sy + r, fill="#8b0000", width=3, tag=tag)
             self.create_line(sx - r, sy + r, sx + r, sy - r, fill="#8b0000", width=3, tag=tag)
 
+    def draw_blocked_points(self, points, tag="blocked"):
+        """Red dots where the robot found a trail blocked; points are (x_cm, y_cm, ...)."""
+        self.delete(tag)
+        r = 7
+        for point in points:
+            sx, sy = self.world_to_screen(point[0], point[1])
+            self.create_oval(sx - r, sy - r, sx + r, sy + r, fill="#e53935", outline="#7f0000", width=2, tag=tag)
+
     def draw_robot(self, x, y, tag="robot", color="#222222"):
         self.delete(tag)
         sx, sy = self.world_to_screen(x, y)

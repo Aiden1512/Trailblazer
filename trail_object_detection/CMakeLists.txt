@@ -12,11 +12,13 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2 REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 include_directories(include)
 
 add_executable(ground_filter src/ground_filter.cpp)
 ament_target_dependencies(ground_filter rclcpp sensor_msgs std_msgs tf2_ros tf2)
+target_link_libraries(ground_filter yaml-cpp)
 
 add_executable(water_guard src/water_guard.cpp)
 ament_target_dependencies(water_guard rclcpp geometry_msgs sensor_msgs std_msgs)
@@ -35,6 +37,11 @@ if(BUILD_TESTING)
   add_test(NAME test_trail_logic COMMAND test_trail_logic)
   add_executable(test_trail_keeper_logic test/test_trail_keeper_logic.cpp)
   add_test(NAME test_trail_keeper_logic COMMAND test_trail_keeper_logic)
+  add_executable(test_scenery_map test/test_scenery_map.cpp)
+  target_link_libraries(test_scenery_map yaml-cpp)
+  target_compile_definitions(test_scenery_map PRIVATE
+    TRAIL_MAP_YAML="${CMAKE_CURRENT_SOURCE_DIR}/../41068_ignition_bringup/maps/trail_map.yaml")
+  add_test(NAME test_scenery_map COMMAND test_scenery_map)
 endif()
 
 ament_package()

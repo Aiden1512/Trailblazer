@@ -5,6 +5,7 @@ What the real robot is doing: obstacle detection and mission progress, via ROS 2
     /husky1/obstacle_stop       std_msgs/Bool    stop  - obstacle in the stop range   (ground_filter, every lidar frame)
     /husky1/mission_status      std_msgs/String  one-line mission progress         (mission_manager, latched)
     /husky1/mission_progress    std_msgs/Float32 mission completion, 0-100 %       (mission_manager, latched)
+    /husky1/blocked_points      std_msgs/String  JSON list of where trails are blocked (mission_manager, latched)
     /husky1/water_detected      std_msgs/Bool    water (blue ground) in slow range (water_guard, every camera frame)
     /husky1/water_stop          std_msgs/Bool    forward teleop blocked by water   (water_guard, every camera frame)
     /husky1/start_mission       std_srvs/Trigger starts the inspection             (mission_manager holds until called)
@@ -14,6 +15,7 @@ the GUI polls get() and status() so no Tk calls are made from the ROS thread.
 request_start() asks mission_manager to start; its answer is queued in
 start_results as (ok, message) for the GUI to log.
 """
+import json
 import os
 import queue
 import threading
@@ -38,6 +40,7 @@ WARN_TOPIC = "/husky1/obstacle_detected"
 STOP_TOPIC = "/husky1/obstacle_stop"
 MISSION_TOPIC = "/husky1/mission_status"
 PROGRESS_TOPIC = "/husky1/mission_progress"
+BLOCKED_TOPIC = "/husky1/blocked_points"
 START_SERVICE = "/husky1/start_mission"
 WATER_WARN_TOPIC = "/husky1/water_detected"
 WATER_STOP_TOPIC = "/husky1/water_stop"
@@ -55,6 +58,7 @@ class MissionStatusFeed:
         self._stop = False
         self._mission_text = None
         self._mission_progress = None
+        self._blocked_points = []
         self._last_detector_time = None
         self._water_warn = False
         self._water_stop = False
@@ -94,6 +98,7 @@ class MissionStatusFeed:
                                  durability=DurabilityPolicy.TRANSIENT_LOCAL)
             self._node.create_subscription(String, MISSION_TOPIC, self._on_mission, latched)
             self._node.create_subscription(Float32, PROGRESS_TOPIC, self._on_progress, latched)
+            self._node.create_subscription(String, BLOCKED_TOPIC, self._on_blocked, latched)
             self._start_client = self._node.create_client(Trigger, START_SERVICE)
             self._executor = SingleThreadedExecutor()
             self._executor.add_node(self._node)
@@ -164,6 +169,16 @@ class MissionStatusFeed:
         with self._lock:
             self._mission_progress = msg.data
 
+    def _on_blocked(self, msg):
+        try:
+            points = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        # map frame metres -> GUI world centimetres (the map frame is lined up with the world)
+        blocked = [(p["x"] * 100.0, p["y"] * 100.0, p.get("edge"), p.get("from", "")) for p in points]
+        with self._lock:
+            self._blocked_points = blocked
+
     def _on_front_obstacle(self, msg):
         with self._lock:
             self._front_obstacle = msg.data
@@ -207,6 +222,11 @@ class MissionStatusFeed:
         mission_manager has started a mission."""
         with self._lock:
             return self._mission_progress
+
+    def get_blocked_points(self):
+        """Return [(x_cm, y_cm, edge, from_junction), ...]: where mission_manager found trails blocked."""
+        with self._lock:
+            return list(self._blocked_points)
 
     def get_water(self):
         """Return 'stop', 'warn', 'clear', or None while water_guard isn't

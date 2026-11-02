@@ -4,6 +4,8 @@
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <iomanip>
+#include <sstream>
 
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
@@ -51,6 +53,10 @@ namespace trail_decision_making
             "/husky1/mission_progress", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
         // Published continuously (water_guard ignores it once it goes stale), so no state change is missed
         follow_trail_pub_ = create_publisher<std_msgs::msg::Bool>("/husky1/follow_trail", 10);
+        // Where trails were found blocked, for the GUI map (JSON list, latched)
+        blocked_points_pub_ = create_publisher<std_msgs::msg::String>(
+            "/husky1/blocked_points", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
+        blocked_marker_ahead_ = declare_parameter<double>("blocked_marker_ahead", 1.2);
         follow_trail_timer_ = create_wall_timer(200ms, [this]()
                                                 {
             std_msgs::msg::Bool msg;
@@ -110,6 +116,9 @@ namespace trail_decision_making
         returning_home_ = false;
         driving_to_home_pose_ = false;
         failed_recoveries_ = 0;
+        checking_far_side_ = false;
+        blocked_points_.clear();
+        publishBlockedPoints();
 
         RCLCPP_INFO(get_logger(), "Start command received");
         publishStatus("Start command received");
@@ -240,7 +249,9 @@ namespace trail_decision_making
         }
         // Determine if we are traversing the edge in reverse (from to_node to from_node) or not (from from_node to to_node)
         traversing_reverse_ = (edge->to_node == current_node_id_);        // if the current node is the to_node, we are traversing in reverse
-        inspecting_edge_ = (edge->status == EdgeStatus::UNINSPECTED); // false for already-inspected edges we are only passing through
+        // Coming into a blocked edge from its unchecked far side: inspect it up to the obstacle from this end
+        checking_far_side_ = (edge->status == EdgeStatus::BLOCKED && edge->far_side_node == current_node_id_);
+        inspecting_edge_ = (edge->status == EdgeStatus::UNINSPECTED) || checking_far_side_; // false for already-inspected edges we are only passing through
         startEdgeFollow(*edge, traversing_reverse_); // start traversing the edge, either in reverse or not, depending on the current node
     }
     // Follow the edge's waypoints from current_node_id_ to its other end, driving to the entry waypoint first if we are not there.
@@ -401,7 +412,8 @@ namespace trail_decision_making
                         current_waypoints_.size(), waypoint.x, waypoint.y);
             publishStatus(std::string(returning_home_ ? "Heading home - " : "") + "Edge " +
                           std::to_string(current_edge_id_) +
-                          (inspecting_edge_ ? " (inspecting)" : "") + ": waypoint " +
+                          (checking_far_side_ ? " (checking the far side of the obstacle)"
+                                              : inspecting_edge_ ? " (inspecting)" : "") + ": waypoint " +
                           std::to_string(current_waypoint_index_ + 1) + "/" +
                           std::to_string(current_waypoints_.size()));
         }
@@ -520,9 +532,20 @@ namespace trail_decision_making
         if (inspecting_edge_)
         {
             graph_.setEdgeStatus(current_edge_id_, EdgeStatus::INSPECTED); // mark the edge as inspected
+            graph_.setFarSideNode(current_edge_id_, -1);
+            if (checking_far_side_) // came all the way through from the other side: the obstacle has gone
+            {
+                const auto removed = std::remove_if(blocked_points_.begin(), blocked_points_.end(),
+                                                    [this](const BlockedPoint &b) { return b.edge == current_edge_id_; });
+                blocked_points_.erase(removed, blocked_points_.end());
+                publishBlockedPoints();
+                RCLCPP_INFO(get_logger(), "Edge %d is clear from the other side: the obstacle has gone", current_edge_id_);
+            }
             publishProgress();
-            publishStatus("Edge " + std::to_string(current_edge_id_) + " inspected - " + progressText());
+            publishStatus("Edge " + std::to_string(current_edge_id_) + " inspected" +
+                          (checking_far_side_ ? " (obstacle gone)" : "") + " - " + progressText());
             inspecting_edge_ = false;
+            checking_far_side_ = false;
         }
 
         current_node_id_ = planner_.otherEnd(current_edge_id_, current_node_id_); // update the current node to the other end of the edge so we can plan to the next uninspected edge
@@ -675,8 +698,7 @@ namespace trail_decision_making
         }
         if (current_edge_id_ >= 0 && !backtracking_) // could not even reach the edge's entry from here, so don't try it again
         {
-            graph_.setEdgeStatus(current_edge_id_, EdgeStatus::BLOCKED);
-            publishProgress();
+            markCurrentEdgeBlocked();
             RCLCPP_WARN(get_logger(), "Could not reach the start of edge %d; marked blocked", current_edge_id_);
         }
         // Could not reach the edge entry, or could not drive back to the junction: carry on from the nearest junction
@@ -708,13 +730,15 @@ namespace trail_decision_making
     // When that is done onEdgeFinished() replans the rest of the inspection, which never uses blocked edges.
     void MissionManager::startBacktrackToJunction(const std::string &reason)
     {
-        graph_.setEdgeStatus(current_edge_id_, EdgeStatus::BLOCKED);
+        const bool far_side_next = markCurrentEdgeBlocked();
         route_.clear(); // the old route may go through the blocked edge
         inspecting_edge_ = false;
-        RCLCPP_WARN(get_logger(), "%s edge %d; marked blocked, returning to %s",
-                    reason.c_str(), current_edge_id_, junctionName(current_node_id_).c_str());
-        publishProgress();
-        publishStatus("Edge " + std::to_string(current_edge_id_) + " blocked by an obstacle - " + progressText());
+        checking_far_side_ = false;
+        RCLCPP_WARN(get_logger(), "%s edge %d; marked blocked, returning to %s%s",
+                    reason.c_str(), current_edge_id_, junctionName(current_node_id_).c_str(),
+                    far_side_next ? " (will check it from the other end later)" : "");
+        publishStatus("Edge " + std::to_string(current_edge_id_) + " blocked by an obstacle" +
+                      (far_side_next ? "; will check it from the other end" : "") + " - " + progressText());
 
         // Waypoints before current_waypoint_index_ have been reached; drive them in reverse, ending at the junction
         const size_t reached = std::max<size_t>(current_waypoint_index_, 1);
@@ -731,10 +755,67 @@ namespace trail_decision_making
 
     // No reachable uninspected trail is left, so follow the trails back to the junction nearest home
     // (see chooseNextEdgeAndSendGoal), then sendHomeGoal() drives the last bit to the home position.
+    // Mark the current edge blocked where the robot is now, and put a marker on the GUI map. If it was being
+    // inspected for the first time, the stretch beyond the obstacle is still uninspected, so it is to be
+    // inspected later from the other end (returns true); if we were already coming from that other end
+    // (or only passing through), there is nothing more to check on it.
+    bool MissionManager::markCurrentEdgeBlocked()
+    {
+        const TrailEdge *edge = graph_.getEdge(current_edge_id_);
+        const bool first_time = edge && edge->status == EdgeStatus::UNINSPECTED;
+        graph_.setEdgeStatus(current_edge_id_, EdgeStatus::BLOCKED);
+        graph_.setFarSideNode(current_edge_id_, first_time ? planner_.otherEnd(current_edge_id_, current_node_id_) : -1);
+        recordBlockedPoint();
+        publishProgress();
+        return first_time;
+    }
+
+    // The obstacle is about blocked_marker_ahead_ in front of the robot when it stops for it
+    void MissionManager::recordBlockedPoint()
+    {
+        try
+        {
+            const auto tf = tf_buffer_->lookupTransform(global_frame_, robot_frame_, tf2::TimePointZero);
+            const auto &q = tf.transform.rotation;
+            const double yaw = std::atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+            BlockedPoint point;
+            point.edge = current_edge_id_;
+            point.x = tf.transform.translation.x + blocked_marker_ahead_ * std::cos(yaw);
+            point.y = tf.transform.translation.y + blocked_marker_ahead_ * std::sin(yaw);
+            point.from_node = current_node_id_;
+            blocked_points_.push_back(point);
+            RCLCPP_INFO(get_logger(), "Edge %d blocked at (%.2f, %.2f), coming from %s", point.edge, point.x, point.y,
+                        junctionName(point.from_node).c_str());
+            publishBlockedPoints();
+        }
+        catch (const tf2::TransformException &ex)
+        {
+            RCLCPP_WARN(get_logger(), "Could not get robot pose to mark where edge %d is blocked: %s",
+                        current_edge_id_, ex.what());
+        }
+    }
+
+    // JSON list for the GUI: [{"edge": 2, "x": -5.1, "y": -1.2, "from": "junction 3"}, ...] in the map frame (metres)
+    void MissionManager::publishBlockedPoints()
+    {
+        std::ostringstream json;
+        json << std::fixed << std::setprecision(2) << "[";
+        for (size_t i = 0; i < blocked_points_.size(); ++i)
+        {
+            const auto &b = blocked_points_[i];
+            json << (i ? ", " : "") << "{\"edge\": " << b.edge << ", \"x\": " << b.x << ", \"y\": " << b.y
+                 << ", \"from\": \"" << junctionName(b.from_node) << "\"}";
+        }
+        json << "]";
+        std_msgs::msg::String msg;
+        msg.data = json.str();
+        blocked_points_pub_->publish(msg);
+    }
+
     void MissionManager::startReturnHome()
     {
         returning_home_ = true;
-        const size_t unreachable = graph_.countEdges(EdgeStatus::UNINSPECTED);
+        const size_t unreachable = graph_.countEdges(EdgeStatus::UNINSPECTED) + graph_.pendingFarSides();
         RCLCPP_INFO(get_logger(), "Inspection finished (%s, %zu unreachable); returning home to (%.2f, %.2f)",
                     progressText().c_str(), unreachable, home_x_, home_y_);
         publishStatus("Inspection finished - " + progressText() +
@@ -760,7 +841,8 @@ namespace trail_decision_making
         returning_home_ = false;
         mission_active_ = false;
         const size_t blocked = graph_.countEdges(EdgeStatus::BLOCKED);
-        const size_t unreachable = graph_.countEdges(EdgeStatus::UNINSPECTED);
+        // uninspected trails, and blocked trails whose far side couldn't be reached
+        const size_t unreachable = graph_.countEdges(EdgeStatus::UNINSPECTED) + graph_.pendingFarSides();
         RCLCPP_INFO(get_logger(), "Mission complete: %s, %zu blocked, %zu unreachable; robot is home",
                     progressText().c_str(), blocked, unreachable);
         publishProgress();

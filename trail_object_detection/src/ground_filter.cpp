@@ -31,6 +31,11 @@ GroundFilter::GroundFilter() : Node("ground_filter")
   const int off_frames = declare_parameter("off_frames", 3);
   warn_debounce_ = trail_object_detection::Debouncer(on_frames, off_frames);
   stop_debounce_ = trail_object_detection::Debouncer(on_frames, off_frames);
+  near_debounce_ = trail_object_detection::Debouncer(1, off_frames);
+  collision_debounce_ = trail_object_detection::Debouncer(1, off_frames); // react on the first frame
+  near_distance_ = declare_parameter("near_distance", near_distance_);
+  collision_distance_ = declare_parameter("collision_distance", collision_distance_);
+  collision_half_width_ = declare_parameter("collision_half_width", collision_half_width_);
 
   auto &t = trail_params_;
   trail_check_ = declare_parameter("trail_check", trail_check_);
@@ -39,6 +44,23 @@ GroundFilter::GroundFilter() : Node("ground_filter")
   odom_frame_ = declare_parameter("odom_frame", odom_frame_);
   trail_memory_ = trail_object_detection::TrailMemory(
       0.2, declare_parameter("trail_memory_sec", 120.0));
+  map_frame_ = declare_parameter("map_frame", map_frame_);
+  const std::string scenery_map = declare_parameter("scenery_map", std::string());
+  const double scenery_tolerance = declare_parameter("scenery_tolerance", 0.35);
+  if (!scenery_map.empty())
+  {
+    std::string error;
+    if (scenery_.load(scenery_map, scenery_tolerance, error))
+    {
+      RCLCPP_INFO(get_logger(), "Known scenery: %d occupied cells from '%s' (+%.2f m); obstacles there don't stop the robot",
+                  scenery_.occupiedCells(), scenery_map.c_str(), scenery_tolerance);
+    }
+    else
+    {
+      RCLCPP_ERROR(get_logger(), "Could not load scenery map '%s': %s; every obstacle counts",
+                   scenery_map.c_str(), error.c_str());
+    }
+  }
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
   t.camera_height = declare_parameter("camera_height", t.camera_height);
@@ -103,6 +125,8 @@ GroundFilter::GroundFilter() : Node("ground_filter")
       "/husky1/obstacle_image", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
   obstacle_pub_ = create_publisher<std_msgs::msg::Bool>("/husky1/obstacle_detected", 10);
   stop_pub_ = create_publisher<std_msgs::msg::Bool>("/husky1/obstacle_stop", 10);
+  near_pub_ = create_publisher<std_msgs::msg::Bool>("/husky1/obstacle_near", 10);
+  collision_pub_ = create_publisher<std_msgs::msg::Bool>("/husky1/collision_stop", 10);
   scan_pub_ = create_publisher<sensor_msgs::msg::LaserScan>("/husky1/obstacle_scan", 10);
   RCLCPP_INFO(
       get_logger(),
@@ -123,6 +147,9 @@ void GroundFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
   ZoneCounts counts;
   std::size_t kept = 0;
   std::size_t off_trail = 0;
+  std::size_t scenery = 0;
+  std::size_t near_points = 0;      // every obstacle, before the scenery / trail checks
+  std::size_t collision_points = 0;
   std::vector<std::pair<float, float>> zone_points; // obstacle points inside the warn/stop corridor
   obstacle_scan_.reset();
 
@@ -131,6 +158,27 @@ void GroundFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
   const double now = stamp.seconds();
   const bool use_camera = trail_check_ && trailImageUsable(stamp);
   bool use_memory = false;
+  bool use_scenery = false;
+  if (scenery_.loaded())
+  {
+    try
+    {
+      const auto tf = tf_buffer_->lookupTransform(map_frame_, msg->header.frame_id, tf2::TimePointZero);
+      const auto &q = tf.transform.rotation;
+      const double yaw = std::atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+      map_x_ = tf.transform.translation.x;
+      map_y_ = tf.transform.translation.y;
+      map_cos_ = std::cos(yaw);
+      map_sin_ = std::sin(yaw);
+      use_scenery = true;
+    }
+    catch (const tf2::TransformException &ex)
+    {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
+                           "Known scenery: no TF %s -> %s yet, so every obstacle counts: %s",
+                           msg->header.frame_id.c_str(), map_frame_.c_str(), ex.what());
+    }
+  }
   if (trail_check_)
   {
     try
@@ -159,12 +207,27 @@ void GroundFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 
     if (c == PointClass::Obstacle)
     {
+      // Physical clearance, whatever the obstacle is: these never get filtered
+      const double ahead = static_cast<double>(x) - params_.sensor_to_front;
+      if (x > 0.0f && ahead <= near_distance_ && std::fabs(y) <= params_.corridor_half_width)
+      {
+        ++near_points;
+      }
+      if (x > 0.0f && ahead <= collision_distance_ && std::fabs(y) <= collision_half_width_)
+      {
+        ++collision_points;
+      }
       ZoneCounts point;
       trail_object_detection::countPoint(x, y, params_, point);
       if (point.warn > 0) // in the corridor ahead: only counts if it is on the trail (or nobody can tell)
       {
         zone_points.emplace_back(x, y);
-        if (isOffTrail(x, y, use_camera, use_memory, now))
+        if (use_scenery && scenery_.isScenery(map_x_ + map_cos_ * x - map_sin_ * y,
+                                              map_y_ + map_sin_ * x + map_cos_ * y))
+        {
+          ++scenery; // was there when the trails were mapped, e.g. tree foliage over the trail edge
+        }
+        else if (isOffTrail(x, y, use_camera, use_memory, now))
         {
           ++off_trail;
         }
@@ -205,6 +268,17 @@ void GroundFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
   obstacle_pub_->publish(m);
   m.data = stop;
   stop_pub_->publish(m);
+  m.data = near_debounce_.update(near_points >= static_cast<std::size_t>(min_warn_points_));
+  near_pub_->publish(m);
+  const bool collision = collision_debounce_.update(collision_points >= static_cast<std::size_t>(min_stop_points_));
+  m.data = collision;
+  collision_pub_->publish(m);
+  if (collision != previous_collision_)
+  {
+    RCLCPP_WARN(get_logger(), "Collision stop %s (%zu pts within %.2f m of the bumper)",
+                collision ? "ACTIVE: forward driving blocked" : "CLEAR", collision_points, collision_distance_);
+    previous_collision_ = collision;
+  }
 
   if (stop && !previous_stop_)
   {
@@ -242,14 +316,15 @@ void GroundFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     RCLCPP_WARN(get_logger(), "Obstacle stop %s (pts=%zu)", stop ? "ACTIVE" : "CLEAR", counts.stop);
     previous_stop_ = stop;
   }
-  if (off_trail > 0 && counts.stop < static_cast<std::size_t>(min_stop_points_))
+  if ((off_trail > 0 || scenery > 0) && counts.stop < static_cast<std::size_t>(min_stop_points_))
   {
     RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,
-                         "Ignoring %zu obstacle points ahead: they are beside the trail, not on it", off_trail);
+                         "Ignoring %zu obstacle points ahead: %zu known scenery from the trail map, "
+                         "%zu beside the trail", off_trail + scenery, scenery, off_trail);
   }
   RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
-                        "kept=%zu warn_pts=%zu stop_pts=%zu off_trail=%zu",
-                        kept, counts.warn, counts.stop, off_trail);
+                        "kept=%zu warn_pts=%zu stop_pts=%zu off_trail=%zu scenery=%zu",
+                        kept, counts.warn, counts.stop, off_trail, scenery);
   if (use_camera && trail_debug_pub_->get_subscription_count() > 0)
   {
     publishTrailDebug(zone_points);

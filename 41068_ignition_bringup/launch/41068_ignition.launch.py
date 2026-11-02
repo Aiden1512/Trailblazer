@@ -259,6 +259,10 @@ def generate_launch_description():
 
     # Husky spawn position in the world (m). Default 0,0 as before.
     ld.add_action(DeclareLaunchArgument('spawn_x', default_value='0.0'))
+    # Phase 1 map of the scenery (map_saver YAML). Obstacles already in it don't stop the robot; '' = off.
+    ld.add_action(DeclareLaunchArgument(
+        'scenery_map',
+        default_value=PathJoinSubstitution([FindPackageShare('41068_ignition_bringup'), 'maps', 'trail_map.yaml'])))
     ld.add_action(DeclareLaunchArgument('spawn_y', default_value='0.0'))
     # Husky heading at spawn (rad, anticlockwise from +x). 3.14159 = turned around.
     ld.add_action(DeclareLaunchArgument('spawn_yaw', default_value='0.0'))
@@ -437,7 +441,8 @@ def generate_launch_description():
         executable='ground_filter',
         name='ground_filter',
         output='screen',
-        parameters=[{'use_sim_time': use_sim_time}],
+        parameters=[{'use_sim_time': use_sim_time,
+                     'scenery_map': LaunchConfiguration('scenery_map')}],
         # The trail check remembers its verdicts in husky1_odom, which is only on the robot's own TF topics
         remappings=[('/tf', '/husky1/tf'), ('/tf_static', '/husky1/tf_static')],
         condition=_if_true('husky'),

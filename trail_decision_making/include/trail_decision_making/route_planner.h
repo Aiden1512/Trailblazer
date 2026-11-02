@@ -15,8 +15,9 @@ namespace trail_decision_making
         explicit RoutePlanner(const TrailGraph &graph) : graph_(graph) {}
 
         // Ordered edge ids to drive from start_node: any backtracking edges through
-        // already-inspected trail, ending with the nearest UNINSPECTED edge.
-        // BLOCKED edges are never used. Empty vector => nothing left to inspect.
+        // already-inspected trail, ending with the nearest UNINSPECTED edge, or the nearest BLOCKED edge
+        // reached at its far_side_node (to inspect it from that end up to the obstacle).
+        // BLOCKED edges are never driven through. Empty vector => nothing left to inspect.
         std::vector<int> planToNextUninspected(int start_node) const;
 
         // Ordered edge ids to drive from start_node to goal_node, never using BLOCKED edges.

@@ -37,6 +37,7 @@ namespace trail_decision_making
         rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_; // one-line progress for the GUI
         rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr progress_pub_; // mission completion, 0-100 %
         rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr follow_trail_pub_; // lets water_guard's trail-keeper steer
+        rclcpp::Publisher<std_msgs::msg::String>::SharedPtr blocked_points_pub_; // blocked spots for the GUI map
         rclcpp::TimerBase::SharedPtr follow_trail_timer_;
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv_;   // the GUI's "Start Autonomous Inspection" button
         GoalHandleNavigateToPose::SharedPtr current_goal_handle_;
@@ -61,6 +62,9 @@ namespace trail_decision_making
         void handleNavigationFailure();
         void replanFromNearestJunction();
         void startBacktrackToJunction(const std::string &reason);
+        bool markCurrentEdgeBlocked();
+        void recordBlockedPoint();
+        void publishBlockedPoints();
         void startReturnHome();
         void sendHomeGoal();
         void finishMission();
@@ -79,6 +83,16 @@ namespace trail_decision_making
         int current_edge_id_ = -1;
         bool traversing_reverse_ = false;
         bool inspecting_edge_ = false; // current edge was uninspected, so finishing it marks it inspected
+        bool checking_far_side_ = false; // inspecting a blocked edge from its other end, up to the obstacle
+
+        struct BlockedPoint
+        {
+            int edge = -1;
+            double x = 0.0, y = 0.0; // map frame
+            int from_node = -1;      // junction the robot was coming from when it found it
+        };
+        std::vector<BlockedPoint> blocked_points_;
+        double blocked_marker_ahead_ = 1.2; // obstacle is about this far ahead of base_link when the robot stops
         bool mission_active_ = false;
         bool obstacle_stop_active_ = false;      // latest value of the obstacle_stop topic
         bool obstacle_pause_active_ = false;     // stopped, waiting before trying to go around

@@ -172,7 +172,13 @@ ros2 node list | grep ground_filter
 
 The LiDAR finds obstacles and the camera checks whether each one is on the (brown) trail; obstacles on the
 grass beside the trail are ignored for stopping (Nav2 still avoids them). Set `trail_check:=false` on the
-node to go back to LiDAR only. To see what it checks:
+node to go back to LiDAR only.
+
+Obstacles that were already there when the trails were mapped (in the Phase 1 SLAM map,
+`41068_ignition_bringup/maps/trail_map.yaml`) are known scenery and never block a trail, e.g. trees whose
+low branches reach over the trail edge. Only obstacles that are new since mapping block a trail. If the world
+changes, save a new map from the Phase 1 run with `map_saver` and pass it with `scenery_map:=/path/to/map.yaml`
+on the launch command (`scenery_map:=''` turns this off). To see what it checks:
 `ros2 run rqt_image_view rqt_image_view /husky1/trail_check_debug` (green = trail, magenta = not trail).
 
 The detector publishes:

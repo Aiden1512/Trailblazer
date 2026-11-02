@@ -70,6 +70,7 @@ class Phase2Frame(ttk.Frame):
         self._last_obstacle_level = None
         self._last_mission_text = None
         self._last_snapshot_id = 0
+        self._blocked_points = []
         self.mission_visible = False
         self.placing_obstacles = False
         self.running = False
@@ -146,6 +147,7 @@ class Phase2Frame(ttk.Frame):
         ttk.Label(right, justify="left",
                   text="Black = unvisited route\nGreen = clear / passed\n"
                        "Red = blocked by obstacle\nRed X = obstacle (also in the sim)\n"
+                       "Red dot = where the robot found a trail blocked\n"
                        "Dark circle = robot (live from simulation)\n"
                        "Orange circle = inspection playback").pack(anchor="w", pady=(0, 10))
 
@@ -304,6 +306,7 @@ class Phase2Frame(ttk.Frame):
         self.canvas.draw_edges(self._display_edges if self._display_edges else self.state.edges)
         self.canvas.draw_nodes(getattr(self.state, "display_nodes", self.state.nodes))
         self.canvas.draw_obstacles(self.state.obstacles)
+        self.canvas.draw_blocked_points(self._blocked_points)
         if self.mission_visible:
             self.canvas.draw_robot(self.mission_x, self.mission_y, tag="mission", color="#ff9800")
         self._draw_real_robot()
@@ -356,6 +359,14 @@ class Phase2Frame(ttk.Frame):
             progress = self.status_feed.get_progress()
             if progress is not None:
                 self.mission_progress_var.set(f"Mission completion: {progress:.0f}%")
+            blocked = self.status_feed.get_blocked_points()
+            if blocked != self._blocked_points:
+                for x, y, edge, origin in blocked:
+                    if all((x, y) != (bx, by) for bx, by, *_ in self._blocked_points):
+                        self._log(f"Trail {edge} blocked at ({x / 100:.1f}, {y / 100:.1f}) m, "
+                                  f"found coming from {origin}.")
+                self._blocked_points = blocked
+                self.canvas.draw_blocked_points(blocked)
         if self.snapshot_feed is not None:
             frame_id, _frame = self.snapshot_feed.get_frame()
             if frame_id != self._last_snapshot_id:

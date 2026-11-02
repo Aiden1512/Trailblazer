@@ -41,13 +41,20 @@ namespace trail_decision_making
             for (int edge_id : graph_.getConnectedEdges(node))
             {
                 const TrailEdge *e = graph_.getEdge(edge_id); // get the edge from the graph
-                if (!e || e->status == EdgeStatus::BLOCKED) // skip blocked edges
+                if (!e)
                 {
                     continue;
                 }
-                // If this edge is uninspected, we have found our goal. 
+                // A blocked edge is a goal only from its unchecked far side (inspect it up to the obstacle),
+                // and is never driven through.
+                const bool far_side_check = e->status == EdgeStatus::BLOCKED && e->far_side_node == node;
+                if (e->status == EdgeStatus::BLOCKED && !far_side_check)
+                {
+                    continue;
+                }
+                // If this edge is uninspected (or a far side to check), we have found our goal.
                 //Reconstruct the path and return it.
-                if (e->status == EdgeStatus::UNINSPECTED) 
+                if (e->status == EdgeStatus::UNINSPECTED || far_side_check) 
                 {
                     std::vector<int> path{edge_id};
                     for (int cur = node; parent[cur].second != -1; cur = parent[cur].first)

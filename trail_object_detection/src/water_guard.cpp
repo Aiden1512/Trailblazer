@@ -70,13 +70,26 @@ WaterGuard::WaterGuard()
         follow_trail_ = msg->data;
         follow_trail_time_ = rclcpp::Clock(RCL_STEADY_TIME).now();
       });
-  obstacle_sub_ = create_subscription<std_msgs::msg::Bool>(
-      "/husky1/obstacle_detected", 10, [this](std_msgs::msg::Bool::SharedPtr msg) {
-        if (msg->data)
+  // Trail-keeper stands down for an obstacle on the trail ahead (obstacle_detected) or ANY obstacle close
+  // ahead (obstacle_near: also scenery and things beside the trail, which Nav2 may need to steer round)
+  auto on_obstacle = [this](std_msgs::msg::Bool::SharedPtr msg) {
+    if (msg->data)
+    {
+      obstacle_time_ = rclcpp::Clock(RCL_STEADY_TIME).now();
+      have_obstacle_time_ = true;
+    }
+  };
+  obstacle_sub_ = create_subscription<std_msgs::msg::Bool>("/husky1/obstacle_detected", 10, on_obstacle);
+  obstacle_near_sub_ = create_subscription<std_msgs::msg::Bool>("/husky1/obstacle_near", 10, on_obstacle);
+  collision_sub_ = create_subscription<std_msgs::msg::Bool>(
+      "/husky1/collision_stop", 10, [this](std_msgs::msg::Bool::SharedPtr msg) {
+        if (msg->data == collision_stop_)
         {
-          obstacle_time_ = rclcpp::Clock(RCL_STEADY_TIME).now();
-          have_obstacle_time_ = true;
+          return;
         }
+        collision_stop_ = msg->data;
+        RCLCPP_WARN(get_logger(), "Obstacle at the bumper %s", collision_stop_ ? "- forward driving blocked" : "cleared");
+        enforceLimit("obstacle at the bumper");
       });
   keeper_active_pub_ = create_publisher<std_msgs::msg::Bool>("/husky1/trail_keeper_active", 10);
   cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>("/husky1/cmd_vel", 10);
@@ -96,11 +109,11 @@ void WaterGuard::onCmd(const geometry_msgs::msg::Twist::SharedPtr msg)
 {
   last_cmd_ = *msg;
   have_cmd_ = true;
-  if (msg->linear.x > 0.0 && gate_.stopped())
+  if (msg->linear.x > 0.0 && (gate_.stopped() || collision_stop_))
   {
     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
                          "Forward blocked (%s); reverse or turn away",
-                         blind_ ? "no camera" : "water ahead");
+                         collision_stop_ ? "obstacle at the bumper" : blind_ ? "no camera" : "water ahead");
   }
   publishGated();
 }
@@ -154,10 +167,16 @@ bool WaterGuard::trailKeeperAllowed()
   return !have_obstacle_time_ || (now - obstacle_time_).seconds() > obstacle_hold_sec_;
 }
 
+// Forward speed factor: water limit, or 0 while something is right at the bumper
+double WaterGuard::forwardFactor() const
+{
+  return collision_stop_ ? 0.0 : gate_.factor();
+}
+
 void WaterGuard::publishGated()
 {
   geometry_msgs::msg::Twist out = last_cmd_;
-  out.linear.x = limitForward(out.linear.x, gate_.factor());
+  out.linear.x = limitForward(out.linear.x, forwardFactor());
   cmd_pub_->publish(out);
   last_published_x_ = out.linear.x;
 }
@@ -167,7 +186,7 @@ void WaterGuard::publishGated()
 // re-send the operator's last command with the new limit applied.
 void WaterGuard::enforceLimit(const char *reason)
 {
-  if (have_cmd_ && limitForward(last_cmd_.linear.x, gate_.factor()) < last_published_x_ - 1e-6)
+  if (have_cmd_ && limitForward(last_cmd_.linear.x, forwardFactor()) < last_published_x_ - 1e-6)
   {
     publishGated();
     RCLCPP_INFO(get_logger(), "Forward speed limited to %.2f m/s (%s)", last_published_x_, reason);
@@ -218,7 +237,7 @@ void WaterGuard::onImage(const sensor_msgs::msg::Image::ConstSharedPtr msg)
     RCLCPP_INFO(get_logger(), "Camera frames arriving");
     // The stop was only for the camera gap, not something the operator saw or
     // asked for, so carry on with their last command if the way is clear.
-    if (have_cmd_ && limitForward(last_cmd_.linear.x, gate_.factor()) > last_published_x_ + 1e-6)
+    if (have_cmd_ && limitForward(last_cmd_.linear.x, forwardFactor()) > last_published_x_ + 1e-6)
     {
       publishGated();
       RCLCPP_INFO(get_logger(), "Resumed at %.2f m/s after camera gap", last_published_x_);
