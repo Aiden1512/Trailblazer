@@ -49,6 +49,13 @@ namespace trail_decision_making
             "/husky1/mission_status", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
         progress_pub_ = create_publisher<std_msgs::msg::Float32>(
             "/husky1/mission_progress", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
+        // Published continuously (water_guard ignores it once it goes stale), so no state change is missed
+        follow_trail_pub_ = create_publisher<std_msgs::msg::Bool>("/husky1/follow_trail", 10);
+        follow_trail_timer_ = create_wall_timer(200ms, [this]()
+                                                {
+            std_msgs::msg::Bool msg;
+            msg.data = followingTrail();
+            follow_trail_pub_->publish(msg); });
         // The mission is held until the GUI's start button calls this service (unless auto_start is set)
         start_srv_ = create_service<std_srvs::srv::Trigger>(
             "/husky1/start_mission",
@@ -185,17 +192,32 @@ namespace trail_decision_making
         {
             // Plan a route to the next uninspected edge from the current node, or home once there are none left.
             // Replanned from scratch every time, so trails blocked since the last plan are avoided.
-            const auto plan = returning_home_ ? planner_.planToNode(current_node_id_, home_node_id_)
-                                              : planner_.planToNextUninspected(current_node_id_);
+            auto plan = returning_home_ ? planner_.planToNode(current_node_id_, home_node_id_)
+                                        : planner_.planToNextUninspected(current_node_id_);
+            if (plan.empty() && returning_home_ && current_node_id_ != home_node_id_)
+            {
+                // Every trail route home is blocked. Still go home along the trails (never straight across
+                // country, e.g. over the pond): take the route through the fewest blocked trails and let Nav2
+                // try to get around the obstacles on them.
+                plan = planner_.planToNodeThroughBlocked(current_node_id_, home_node_id_);
+                if (plan.empty())
+                {
+                    RCLCPP_ERROR(get_logger(), "%s is not connected to %s by any trail; stopping here",
+                                 junctionName(current_node_id_).c_str(), junctionName(home_node_id_).c_str());
+                    publishStatus("Stopped: no trail leads home from " + junctionName(current_node_id_) + " - " +
+                                  progressText());
+                    mission_active_ = false;
+                    return;
+                }
+                RCLCPP_WARN(get_logger(), "Every trail home from %s is blocked; going home through the fewest "
+                                          "blocked trails, with Nav2 going around the obstacles",
+                            junctionName(current_node_id_).c_str());
+                publishStatus("All trails home are blocked: trying the least blocked one");
+            }
             if (plan.empty())
             {
-                if (returning_home_) // at the home junction (or it can't be reached on the trails), drive to the home pose
+                if (returning_home_) // at the home junction, drive the last bit to the home pose
                 {
-                    if (current_node_id_ != home_node_id_)
-                    {
-                        RCLCPP_WARN(get_logger(), "No unblocked trail back to %s; asking Nav2 to drive straight home",
-                                    junctionName(home_node_id_).c_str());
-                    }
                     sendHomeGoal();
                 }
                 else // no reachable uninspected edges left
@@ -592,11 +614,32 @@ namespace trail_decision_making
                !(transit_to_edge_start_ && current_waypoint_index_ == 0);
     }
 
+    // While true, water_guard's camera trail-keeper may steer the robot back onto the brown trail when Nav2
+    // cuts a corner. Not while driving onto the network or to the home pose (both off the trail), nor while
+    // stopped for or going around an obstacle (Nav2 has to leave the trail to get past it).
+    bool MissionManager::followingTrail() const
+    {
+        return mission_active_ &&
+               current_edge_id_ >= 0 &&
+               !driving_to_home_pose_ &&
+               !(transit_to_edge_start_ && current_waypoint_index_ == 0) &&
+               !obstacle_pause_active_ &&
+               !obstacle_avoidance_active_;
+    }
+
     // Obstacles are only backtracked from on a trail edge, and only in backtrack mode;
     // otherwise Nav2 goes around the obstacle instead.
     bool MissionManager::canBacktrack() const
     {
-        return get_parameter("backtrack_on_obstacle").as_bool() && onTrailEdge();
+        return get_parameter("backtrack_on_obstacle").as_bool() && onTrailEdge() && !forcingBlockedEdge();
+    }
+
+    // On the way home through a trail already known to be blocked (because every route home is): backing off
+    // it again would just loop, so Nav2 goes around the obstacle instead.
+    bool MissionManager::forcingBlockedEdge() const
+    {
+        return returning_home_ && current_edge_id_ >= 0 && !backtracking_ &&
+               graph_.getEdgeStatus(current_edge_id_) == EdgeStatus::BLOCKED;
     }
 
     // Nav2 gave up on a waypoint (after retries). Rather than ending the mission, treat the edge as
@@ -614,6 +657,14 @@ namespace trail_decision_making
         {
             RCLCPP_ERROR(get_logger(), "Nav2 could not reach the home position");
             publishStatus("Inspection finished - " + progressText() + ", but Nav2 could not reach the home position");
+            mission_active_ = false;
+            return;
+        }
+        if (forcingBlockedEdge()) // Nav2 couldn't get around the obstacle on the only way home either
+        {
+            RCLCPP_ERROR(get_logger(), "Nav2 cannot get past the obstacle on edge %d, the only trail home; stopping",
+                         current_edge_id_);
+            publishStatus("Stopped: every trail home is blocked - " + progressText());
             mission_active_ = false;
             return;
         }

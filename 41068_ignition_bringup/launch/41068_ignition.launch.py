@@ -438,11 +438,14 @@ def generate_launch_description():
         name='ground_filter',
         output='screen',
         parameters=[{'use_sim_time': use_sim_time}],
+        # The trail check remembers its verdicts in husky1_odom, which is only on the robot's own TF topics
+        remappings=[('/tf', '/husky1/tf'), ('/tf_static', '/husky1/tf_static')],
         condition=_if_true('husky'),
     ))
 
-    # Camera water guard: forwards teleop on /husky1/cmd_vel_teleop to
-    # /husky1/cmd_vel, so teleop works as soon as the sim is up
+    # Camera water guard: forwards teleop on /husky1/cmd_vel_teleop AND Nav2 on
+    # /husky1/cmd_vel_nav_smoothed to /husky1/cmd_vel with forward speed limited
+    # near water, so neither the operator nor Nav2 can drive into the pond
     ld.add_action(Node(
         package='trail_object_detection',
         executable='water_guard',

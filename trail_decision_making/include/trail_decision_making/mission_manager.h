@@ -36,6 +36,8 @@ namespace trail_decision_making
         rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr obstacle_stop_sub_;
         rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_; // one-line progress for the GUI
         rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr progress_pub_; // mission completion, 0-100 %
+        rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr follow_trail_pub_; // lets water_guard's trail-keeper steer
+        rclcpp::TimerBase::SharedPtr follow_trail_timer_;
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv_;   // the GUI's "Start Autonomous Inspection" button
         GoalHandleNavigateToPose::SharedPtr current_goal_handle_;
 
@@ -53,7 +55,9 @@ namespace trail_decision_making
         std::string progressText() const;
         std::string junctionName(int node_id) const;
         bool onTrailEdge() const;
+        bool followingTrail() const;
         bool canBacktrack() const;
+        bool forcingBlockedEdge() const;
         void handleNavigationFailure();
         void replanFromNearestJunction();
         void startBacktrackToJunction(const std::string &reason);

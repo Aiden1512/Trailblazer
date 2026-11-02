@@ -7,20 +7,31 @@
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/float32.hpp"
 
+#include "trail_object_detection/trail_keeper_logic.hpp"
 #include "trail_object_detection/water_logic.hpp"
 
-// WaterGuard: stops teleop driving into water (blue ground) seen by the camera.
-// Teleop publishes to /husky1/cmd_vel_teleop instead of /husky1/cmd_vel; this
-// node forwards it, limiting FORWARD speed only, so the operator can always
-// reverse or turn away. Nav2 still publishes straight to /husky1/cmd_vel, so
-// the Phase 2 autonomous run is unaffected.
+// WaterGuard: stops the robot driving into water (blue ground) seen by the camera.
+// Teleop publishes to /husky1/cmd_vel_teleop and Nav2 to /husky1/cmd_vel_nav_smoothed
+// (see 41068_navigation.launch.py) instead of /husky1/cmd_vel; this node forwards
+// both, limiting FORWARD speed only, so the operator (or Nav2) can always reverse
+// or turn away. If Nav2 keeps pushing towards water it stalls, its goal aborts and
+// mission_manager treats that trail as blocked.
+// Trail-keeper: Nav2 only knows the waypoints, not the trail, so it cuts corners
+// across the grass. While mission_manager says the robot is following a trail
+// (/husky1/follow_trail) and no obstacle is near, Nav2's steering is replaced by
+// a camera one whenever the path ahead turns from brown to grass, until it is
+// back on the trail (see trail_keeper_logic.hpp).
 //   in : /husky1/camera/image        RGB camera (~3 Hz)
 //        /husky1/cmd_vel_teleop      operator commands
+//        /husky1/cmd_vel_nav_smoothed  Nav2 commands (Phase 2 autonomous run)
+//        /husky1/follow_trail        mission_manager: trail-keeper may steer (Bool, 5 Hz)
+//        /husky1/obstacle_detected   ground_filter warn: trail-keeper stands down near obstacles
 //   out: /husky1/cmd_vel             commands with forward speed limited
 //        /husky1/water_detected      warn: water inside slow_distance (Bool, every frame)
 //        /husky1/water_stop          stop: forward driving blocked    (Bool, every frame)
 //        /husky1/water_distance      nearest water ahead [m], -1 = none (Float32, every frame)
 //        /husky1/water_debug         camera image with water painted in (only while subscribed)
+//        /husky1/trail_keeper_active trail-keeper is steering Nav2 back onto the trail (Bool, on change)
 class WaterGuard : public rclcpp::Node
 {
 public:
@@ -29,6 +40,8 @@ public:
 private:
   void onImage(const sensor_msgs::msg::Image::ConstSharedPtr msg);
   void onCmd(const geometry_msgs::msg::Twist::SharedPtr msg);
+  void onNavCmd(const geometry_msgs::msg::Twist::SharedPtr msg);
+  bool trailKeeperAllowed();
   void checkCamera();
   void publishGated();
   void enforceLimit(const char *reason);
@@ -48,8 +61,24 @@ private:
   bool previous_stop_ = false;
   bool previous_warn_ = false;
 
+  // Trail-keeper (all times are wall clock, like last_frame_time_)
+  trail_object_detection::TrailKeeperParams keeper_params_;
+  bool trail_keeper_ = true;
+  double follow_trail_timeout_ = 1.0;
+  double obstacle_hold_sec_ = 3.0; // stay out of Nav2's way this long after an obstacle warning clears
+  trail_object_detection::TrailView trail_view_;
+  bool follow_trail_ = false;
+  rclcpp::Time follow_trail_time_;
+  rclcpp::Time obstacle_time_;
+  bool have_obstacle_time_ = false;
+  bool keeper_active_ = false;
+
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr camera_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr nav_cmd_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr follow_trail_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr obstacle_sub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr keeper_active_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr warn_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr stop_pub_;

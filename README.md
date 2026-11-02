@@ -84,7 +84,15 @@ Click the GUI map to give it keyboard focus, then use:
 
 The yellow trail and recorded junctions/waypoints will appear on the GUI as the robot moves.
 
-> **Water guard note:** The GUI sends teleop commands to `/husky1/cmd_vel_teleop`
+> **Water guard note:** The GUI sends teleop commands to `/husky1/cmd_vel_teleop`, and Nav2's output goes to
+> `/husky1/cmd_vel_nav_smoothed`. The `water_guard` node (started by the simulation launch) forwards both to
+> `/husky1/cmd_vel`, blocking forward driving into water at all times, in teleop and in the autonomous run.
+>
+> **Trail-keeper:** in the autonomous run, `water_guard` also keeps Nav2 on the brown trail. When the path just
+> ahead turns to grass (Nav2 cutting a corner between waypoints), it slows down and steers back onto the trail,
+> then hands steering back to Nav2. It only does this while `mission_manager` says the robot is following a
+> trail (`/husky1/follow_trail`) and no obstacle is near, so Nav2 can still drive around obstacles. Watch
+> `/husky1/trail_keeper_active`, or turn it off with the `trail_keeper:=false` parameter on `water_guard`.
 
 ### 6. Reset if you need to start over
 

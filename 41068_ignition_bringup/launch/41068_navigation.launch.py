@@ -129,6 +129,10 @@ def generate_launch_description():
         # they become /<robot>/map and /<robot>/map_updates.
         SetRemap(src='/map', dst='map'),
         SetRemap(src='/map_updates', dst='map_updates'),
+        # Nav2's final output (the velocity smoother's cmd_vel_smoothed, which nav2_bringup remaps to cmd_vel)
+        # goes to the water guard instead, which gates it onto cmd_vel. Rules set here come before
+        # nav2_bringup's own remaps, so this one wins; nothing else in Nav2 uses cmd_vel_smoothed.
+        SetRemap(src='cmd_vel_smoothed', dst='cmd_vel_nav_smoothed'),
 
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(

@@ -6,7 +6,9 @@
 
 using trail_object_detection::limitForward;
 
-WaterGuard::WaterGuard() : Node("water_guard"), last_frame_time_(0, 0, RCL_STEADY_TIME)
+WaterGuard::WaterGuard()
+    : Node("water_guard"), last_frame_time_(0, 0, RCL_STEADY_TIME),
+      follow_trail_time_(0, 0, RCL_STEADY_TIME), obstacle_time_(0, 0, RCL_STEADY_TIME)
 {
   auto &p = params_;
   p.camera_height = declare_parameter("camera_height", p.camera_height);
@@ -28,6 +30,20 @@ WaterGuard::WaterGuard() : Node("water_guard"), last_frame_time_(0, 0, RCL_STEAD
   camera_timeout_ = declare_parameter("camera_timeout", 3.0);
   block_without_camera_ = declare_parameter("block_without_camera", true);
   gate_ = trail_object_detection::WaterGate(p);
+
+  auto &k = keeper_params_;
+  trail_keeper_ = declare_parameter("trail_keeper", trail_keeper_);
+  follow_trail_timeout_ = declare_parameter("follow_trail_timeout", follow_trail_timeout_);
+  obstacle_hold_sec_ = declare_parameter("keeper_obstacle_hold_sec", obstacle_hold_sec_);
+  k.camera.camera_height = p.camera_height;
+  k.camera.horizontal_fov = p.horizontal_fov;
+  k.camera.hue_min = declare_parameter("trail_hue_min", k.camera.hue_min);
+  k.camera.hue_max = declare_parameter("trail_hue_max", k.camera.hue_max);
+  k.camera.sat_min = declare_parameter("trail_sat_min", k.camera.sat_min);
+  k.camera.val_min = declare_parameter("trail_val_min", k.camera.val_min);
+  k.on_trail_fraction = declare_parameter("keeper_on_trail_fraction", k.on_trail_fraction);
+  k.max_angular = declare_parameter("keeper_max_angular", k.max_angular);
+  k.off_trail_speed_factor = declare_parameter("keeper_speed_factor", k.off_trail_speed_factor);
   if (block_without_camera_)
   {
     gate_.blind(); // nothing seen yet
@@ -46,6 +62,23 @@ WaterGuard::WaterGuard() : Node("water_guard"), last_frame_time_(0, 0, RCL_STEAD
   cmd_sub_ = create_subscription<geometry_msgs::msg::Twist>(
       "/husky1/cmd_vel_teleop", 10,
       [this](geometry_msgs::msg::Twist::SharedPtr msg) { onCmd(msg); });
+  nav_cmd_sub_ = create_subscription<geometry_msgs::msg::Twist>(
+      "/husky1/cmd_vel_nav_smoothed", 10,
+      [this](geometry_msgs::msg::Twist::SharedPtr msg) { onNavCmd(msg); });
+  follow_trail_sub_ = create_subscription<std_msgs::msg::Bool>(
+      "/husky1/follow_trail", 10, [this](std_msgs::msg::Bool::SharedPtr msg) {
+        follow_trail_ = msg->data;
+        follow_trail_time_ = rclcpp::Clock(RCL_STEADY_TIME).now();
+      });
+  obstacle_sub_ = create_subscription<std_msgs::msg::Bool>(
+      "/husky1/obstacle_detected", 10, [this](std_msgs::msg::Bool::SharedPtr msg) {
+        if (msg->data)
+        {
+          obstacle_time_ = rclcpp::Clock(RCL_STEADY_TIME).now();
+          have_obstacle_time_ = true;
+        }
+      });
+  keeper_active_pub_ = create_publisher<std_msgs::msg::Bool>("/husky1/trail_keeper_active", 10);
   cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>("/husky1/cmd_vel", 10);
   warn_pub_ = create_publisher<std_msgs::msg::Bool>("/husky1/water_detected", 10);
   stop_pub_ = create_publisher<std_msgs::msg::Bool>("/husky1/water_stop", 10);
@@ -53,7 +86,10 @@ WaterGuard::WaterGuard() : Node("water_guard"), last_frame_time_(0, 0, RCL_STEAD
   debug_pub_ = create_publisher<sensor_msgs::msg::Image>("/husky1/water_debug", 1);
   watchdog_ = create_wall_timer(std::chrono::milliseconds(200), [this]() { checkCamera(); });
 
-  RCLCPP_INFO(get_logger(), "Forwarding /husky1/cmd_vel_teleop -> /husky1/cmd_vel");
+  RCLCPP_INFO(get_logger(), "Forwarding /husky1/cmd_vel_teleop and /husky1/cmd_vel_nav_smoothed (Nav2) -> /husky1/cmd_vel");
+  RCLCPP_INFO(get_logger(), "Trail-keeper %s: steers Nav2 back onto the trail when less than %.0f%% of the path "
+                            "ahead is trail colour (while /husky1/follow_trail is true and no obstacle is near)",
+              trail_keeper_ ? "ON" : "OFF", k.on_trail_fraction * 100.0);
 }
 
 void WaterGuard::onCmd(const geometry_msgs::msg::Twist::SharedPtr msg)
@@ -67,6 +103,55 @@ void WaterGuard::onCmd(const geometry_msgs::msg::Twist::SharedPtr msg)
                          blind_ ? "no camera" : "water ahead");
   }
   publishGated();
+}
+
+// Nav2 commands: let the trail-keeper replace the steering if Nav2 is cutting across the grass, then
+// apply the water limit like any other command.
+void WaterGuard::onNavCmd(const geometry_msgs::msg::Twist::SharedPtr msg)
+{
+  trail_object_detection::Steering steer;
+  if (trailKeeperAllowed())
+  {
+    steer = trail_object_detection::keepOnTrail(trail_view_, msg->linear.x, msg->angular.z, keeper_params_);
+  }
+  if (steer.active)
+  {
+    msg->linear.x *= steer.speed_factor;
+    msg->angular.z = steer.angular;
+    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,
+                         "Trail-keeper: only %.0f%% of the path ahead is trail; steering back onto it "
+                         "(%.2f m %s, %.2f rad/s)",
+                         trail_view_.ahead_fraction * 100.0, std::fabs(steer.target),
+                         steer.target >= 0.0 ? "left" : "right", steer.angular);
+  }
+  if (steer.active != keeper_active_)
+  {
+    keeper_active_ = steer.active;
+    std_msgs::msg::Bool b;
+    b.data = keeper_active_;
+    keeper_active_pub_->publish(b);
+    if (!keeper_active_)
+    {
+      RCLCPP_INFO(get_logger(), "Trail-keeper: back on the trail, Nav2 steering again");
+    }
+  }
+  onCmd(msg);
+}
+
+// Only while mission_manager says we are following a trail, with a current camera view, and not near an
+// obstacle (Nav2 has to leave the trail to get round one, and the keeper would steer it back into it).
+bool WaterGuard::trailKeeperAllowed()
+{
+  if (!trail_keeper_ || !have_frame_ || blind_ || !trail_view_.valid)
+  {
+    return false;
+  }
+  const auto now = rclcpp::Clock(RCL_STEADY_TIME).now();
+  if (!follow_trail_ || (now - follow_trail_time_).seconds() > follow_trail_timeout_)
+  {
+    return false;
+  }
+  return !have_obstacle_time_ || (now - obstacle_time_).seconds() > obstacle_hold_sec_;
 }
 
 void WaterGuard::publishGated()
@@ -119,6 +204,12 @@ void WaterGuard::onImage(const sensor_msgs::msg::Image::ConstSharedPtr msg)
       msg->data.data(), static_cast<int>(msg->width), static_cast<int>(msg->height),
       static_cast<int>(msg->step), channels, bgr, params_);
   gate_.update(scan.nearest);
+  if (trail_keeper_)
+  {
+    trail_view_ = trail_object_detection::viewTrail(
+        msg->data.data(), static_cast<int>(msg->width), static_cast<int>(msg->height),
+        static_cast<int>(msg->step), channels, bgr, keeper_params_);
+  }
   last_frame_time_ = rclcpp::Clock(RCL_STEADY_TIME).now();
   have_frame_ = true;
   if (blind_)

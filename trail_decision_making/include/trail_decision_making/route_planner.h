@@ -23,6 +23,10 @@ namespace trail_decision_making
         // Empty vector => already there, or goal_node can't be reached.
         std::vector<int> planToNode(int start_node, int goal_node) const;
 
+        // Same, but BLOCKED edges may be used: the route through the fewest of them.
+        // Empty vector => already there, or goal_node isn't connected at all.
+        std::vector<int> planToNodeThroughBlocked(int start_node, int goal_node) const;
+
         // Node reached after traversing edge_id starting from node_id
         int otherEnd(int edge_id, int node_id) const;
 

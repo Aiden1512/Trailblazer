@@ -1,6 +1,8 @@
 #include "trail_decision_making/route_planner.h"
 
 #include <algorithm>
+#include <deque>
+#include <limits>
 #include <queue>
 #include <unordered_map>
 #include <utility>
@@ -107,6 +109,60 @@ namespace trail_decision_making
             }
         }
         return {}; // goal not reachable
+    }
+
+    // 0-1 breadth-first search: a blocked edge costs 1 and any other edge 0, so the route found goes through
+    // as few blocked trails as possible (used to get home when every trail-only route is blocked).
+    std::vector<int> RoutePlanner::planToNodeThroughBlocked(int start_node, int goal_node) const
+    {
+        std::deque<int> frontier;
+        std::unordered_map<int, int> cost;                   // node -> blocked edges used to reach it
+        std::unordered_map<int, std::pair<int, int>> parent; // node -> (prev node, edge used)
+        frontier.push_back(start_node);
+        cost[start_node] = 0;
+        parent[start_node] = {-1, -1};
+
+        while (!frontier.empty())
+        {
+            const int node = frontier.front();
+            frontier.pop_front();
+            for (int edge_id : graph_.getConnectedEdges(node))
+            {
+                const TrailEdge *e = graph_.getEdge(edge_id);
+                if (!e)
+                {
+                    continue;
+                }
+                const int step = e->status == EdgeStatus::BLOCKED ? 1 : 0;
+                const int next = otherEnd(edge_id, node);
+                const auto known = cost.find(next);
+                if (known != cost.end() && known->second <= cost[node] + step)
+                {
+                    continue;
+                }
+                cost[next] = cost[node] + step;
+                parent[next] = {node, edge_id};
+                if (step == 0)
+                {
+                    frontier.push_front(next);
+                }
+                else
+                {
+                    frontier.push_back(next);
+                }
+            }
+        }
+        if (start_node == goal_node || cost.find(goal_node) == cost.end())
+        {
+            return {};
+        }
+        std::vector<int> path;
+        for (int cur = goal_node; parent[cur].second != -1; cur = parent[cur].first)
+        {
+            path.push_back(parent[cur].second);
+        }
+        std::reverse(path.begin(), path.end());
+        return path;
     }
 
 } // namespace trail_decision_making

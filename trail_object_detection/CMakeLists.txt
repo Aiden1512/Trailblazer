@@ -33,6 +33,8 @@ if(BUILD_TESTING)
   add_test(NAME test_water_logic COMMAND test_water_logic)
   add_executable(test_trail_logic test/test_trail_logic.cpp)
   add_test(NAME test_trail_logic COMMAND test_trail_logic)
+  add_executable(test_trail_keeper_logic test/test_trail_keeper_logic.cpp)
+  add_test(NAME test_trail_keeper_logic COMMAND test_trail_keeper_logic)
 endif()
 
 ament_package()
