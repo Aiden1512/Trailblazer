@@ -456,7 +456,13 @@ def generate_launch_description():
         executable='water_guard',
         name='water_guard',
         output='screen',
-        parameters=[{'use_sim_time': use_sim_time}],
+        # Distances are from the camera (~front bumper). Tighter than the defaults (0.45 / 0.9 / 1.1 / 1.8) so
+        # Nav2 can squeeze past the pond when replanning round an obstacle; the Husky is 0.67 m wide.
+        parameters=[{'use_sim_time': use_sim_time,
+                     'corridor_half_width': 0.40,
+                     'stop_distance': 0.5,
+                     'release_distance': 0.7,
+                     'slow_distance': 1.2}],
         condition=_if_true('husky'),
     ))
 

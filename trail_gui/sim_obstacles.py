@@ -33,7 +33,7 @@ import time
 # and higher still as the robot creeps closer. A shorter rock drops out of view once the robot stops for it.
 # Scale is in the mesh's own axes (y up): about 0.72 x 0.83 m across and 0.97 m tall.
 OBSTACLE_MESH = "model://Grey_Rock/Mesh/Grey_Rock.obj"
-OBSTACLE_SCALE_ACROSS = 0.18
+OBSTACLE_SCALE_ACROSS = 0.15
 OBSTACLE_SCALE_UP = 0.4
 CALL_TIMEOUT_MS = 5000
 
