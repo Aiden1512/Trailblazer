@@ -262,7 +262,7 @@ def generate_launch_description():
     # Phase 1 map of the scenery (map_saver YAML). Obstacles already in it don't stop the robot; '' = off.
     ld.add_action(DeclareLaunchArgument(
         'scenery_map',
-        default_value=PathJoinSubstitution([FindPackageShare('41068_ignition_bringup'), 'maps', 'trail_map.yaml'])))
+        default_value=PathJoinSubstitution([FindPackageShare('41068_ignition_bringup'), 'maps', 'trail_map_v2.yaml'])))
     ld.add_action(DeclareLaunchArgument('spawn_y', default_value='0.0'))
     # Husky heading at spawn (rad, anticlockwise from +x). 3.14159 = turned around.
     ld.add_action(DeclareLaunchArgument('spawn_yaw', default_value='0.0'))
