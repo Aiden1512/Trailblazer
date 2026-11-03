@@ -76,7 +76,7 @@ class TrailState:
         self.nodes = []          # list[Node], in creation order
         self.display_nodes = []  # list[Node], in creation order, adjusted for GUI display
         self.edges = []          # list[Edge], consecutive-node segments
-        self.obstacles = []      # list[(x, y)] placed for the Phase 2 simulation
+        self.obstacles = []      # list[(x, y, kind)] placed for the Phase 2 simulation (kind: sim_obstacles.OBSTACLE_TYPES)
         Node._next_id = 1
 
     def add_node(self, x, y, kind="waypoint"):

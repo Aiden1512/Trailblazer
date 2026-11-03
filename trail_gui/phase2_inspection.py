@@ -15,7 +15,9 @@ The dark circle on the map is the robot's ACTUAL position, read live from the
 simulation.
 
 Placing an obstacle on the map also places a real obstacle in the simulation
-(see sim_obstacles.py); "Clear Obstacles" removes them again.
+(see sim_obstacles.py): a rock or a fallen tree, picked with the "Rock" /
+"Fallen Tree" buttons, so the camera's YOLO detector can be shown naming both.
+"Clear Obstacles" removes them again.
 
 "Start Autonomous Inspection" starts the REAL mission: mission_manager holds on
 launch until the GUI calls /husky1/start_mission (see mission_status.py), and its
@@ -43,6 +45,7 @@ from camera_panel import CameraPanel
 from legend_window import LegendWindow
 from map_canvas import MapCanvas
 from robot_pose import STATE_COLORS
+from sim_obstacles import DEFAULT_OBSTACLE, OBSTACLE_TYPES
 import mission_graph
 from state import TrailState
 
@@ -108,6 +111,12 @@ class Phase2Frame(ttk.Frame):
                                        command=self._toggle_obstacle_mode, **button_opts)
         self.obstacle_btn.pack(side="left")
         self._obstacle_btn_default_bg = self.obstacle_btn.cget("bg")
+        # Which kind the next clicks place (a key of sim_obstacles.OBSTACLE_TYPES)
+        self.obstacle_kind = tk.StringVar(value=DEFAULT_OBSTACLE)
+        for kind, spec in OBSTACLE_TYPES.items():
+            tk.Radiobutton(controls, text=spec["label"], variable=self.obstacle_kind, value=kind,
+                           indicatoron=False, selectcolor="#f0c27b",
+                           **dict(button_opts, padx=10)).pack(side="left", padx=(6, 0))
         tk.Button(controls, text="Clear Obstacles", command=self.clear_obstacles,
                   **button_opts).pack(side="left", padx=6)
         self.start_btn = tk.Button(controls, text="Start Autonomous Inspection",
@@ -235,10 +244,11 @@ class Phase2Frame(ttk.Frame):
         if not self.placing_obstacles:
             return
         wx, wy = self.canvas.screen_to_world(event.x, event.y)
-        self.state.obstacles.append((wx, wy))
-        self._log(f"Obstacle placed at ({wx:.0f} cm, {wy:.0f} cm)")
+        kind = self.obstacle_kind.get()
+        self.state.obstacles.append((wx, wy, kind))
+        self._log(f"{OBSTACLE_TYPES[kind]['label']} placed at ({wx:.0f} cm, {wy:.0f} cm)")
         if self.spawner is not None:
-            self.spawner.spawn(wx, wy)           # the outcome is logged by _poll when it arrives
+            self.spawner.spawn(wx, wy, kind)     # the outcome is logged by _poll when it arrives
         self._redraw()
 
     def clear_obstacles(self):

@@ -6,6 +6,8 @@ the map (same colours and shapes), so the key matches what the ranger sees.
 """
 import tkinter as tk
 
+from map_canvas import PLACED_OBSTACLE_COLORS
+
 SWATCH_W, SWATCH_H = 44, 22
 
 
@@ -33,10 +35,11 @@ def _red_dot(c, ring=False):
     c.create_oval(x - r, y - r, x + r, y + r, fill="#e53935", outline="#7f0000", width=2)
 
 
-def _placed(c):
+def _placed(c, kind="rock"):
     x, y, r = SWATCH_W / 2, SWATCH_H / 2, 7
-    c.create_line(x - r, y - r, x + r, y + r, fill="#8b0000", width=3)
-    c.create_line(x - r, y + r, x + r, y - r, fill="#8b0000", width=3)
+    color = PLACED_OBSTACLE_COLORS[kind]
+    c.create_line(x - r, y - r, x + r, y + r, fill=color, width=3)
+    c.create_line(x - r, y + r, x + r, y - r, fill=color, width=3)
 
 
 def _robot(c):
@@ -59,7 +62,8 @@ SECTIONS = [
     ("Obstacles & robot", [
         (_red_dot, "Obstacle found on a trail (blocked, or gone around)"),
         (lambda c: _red_dot(c, ring=True), "One of the two obstacles cutting off a trail"),
-        (_placed, "Obstacle you placed (also in the sim)"),
+        (_placed, "Rock you placed (also in the sim)"),
+        (lambda c: _placed(c, "fallen_tree"), "Fallen tree you placed (also in the sim)"),
         (_robot, "Robot (live from simulation)"),
     ]),
 ]

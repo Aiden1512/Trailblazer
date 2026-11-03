@@ -34,6 +34,10 @@ AXIS_COLOR = "#ffffff"          # X/Y axes through the origin (solid, thicker th
 TRAIL_COLOR = "#fff176"         # bright yellow dashes stay visible over any terrain
 NODE_RADIUS = 6                 # screen pixels - marker size, not world-scaled
 ROBOT_RADIUS = 8
+PLACED_OBSTACLE_COLORS = {     # the X marking an obstacle you placed, by kind (sim_obstacles.OBSTACLE_TYPES)
+    "rock": "#8b0000",
+    "fallen_tree": "#6d3a0c",
+}
 
 
 class MapCanvas(tk.Canvas):
@@ -161,10 +165,11 @@ class MapCanvas(tk.Canvas):
     def draw_obstacles(self, obstacles, tag="obstacles"):
         self.delete(tag)
         r = 8
-        for (x, y) in obstacles:
+        for (x, y, kind) in obstacles:
             sx, sy = self.world_to_screen(x, y)
-            self.create_line(sx - r, sy - r, sx + r, sy + r, fill="#8b0000", width=3, tag=tag)
-            self.create_line(sx - r, sy + r, sx + r, sy - r, fill="#8b0000", width=3, tag=tag)
+            color = PLACED_OBSTACLE_COLORS.get(kind, "#8b0000")
+            self.create_line(sx - r, sy - r, sx + r, sy + r, fill=color, width=3, tag=tag)
+            self.create_line(sx - r, sy + r, sx + r, sy - r, fill=color, width=3, tag=tag)
 
     def draw_mission_graph(self, graph, tag="mission_graph"):
         """The trail network mission_manager inspects (mission_graph.py): each trail along its recorded

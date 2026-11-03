@@ -2,8 +2,9 @@
 Places (and removes) obstacles in the running Ignition Gazebo simulation.
 
 When the operator places an obstacle on the Phase 2 map, SimObstacleSpawner
-asks the simulator to create a real rock (the trail world's Grey_Rock mesh,
-scaled down) at the same spot, using Gazebo's
+asks the simulator to create a real one at the same spot: a rock (the trail
+world's Grey_Rock mesh, scaled down) or a fallen tree (the trail world's Tree
+mesh, laid on its side), using Gazebo's
 `/world/<world>/create` service (and `/world/<world>/remove` to take them
 away again). It does this by calling the `ign service` command line tool
 (`gz service` on newer Gazebo), the same toolchain the simulation is launched
@@ -27,32 +28,44 @@ import subprocess
 import threading
 import time
 
-# The trail world's Grey_Rock mesh (41068_ignition_bringup/models/Grey_Rock), narrower than the world's own
-# rocks (scale 0.5, about 2 m across) so there is room to go around it, but about 1 m tall: the LiDAR is
-# 0.8 m up and its lowest beam points 15 deg down, so it passes 0.4 m above the ground at the stop distance
-# and higher still as the robot creeps closer. A shorter rock drops out of view once the robot stops for it.
-# Scale is in the mesh's own axes (y up): about 0.72 x 0.83 m across and 0.97 m tall.
-OBSTACLE_MESH = "model://Grey_Rock/Mesh/Grey_Rock.obj"
-OBSTACLE_SCALE_ACROSS = 0.15
-OBSTACLE_SCALE_UP = 0.4
 CALL_TIMEOUT_MS = 5000
 
-# The link is turned +90 deg about x like in Grey_Rock's model.sdf (the mesh is y-up); the model's yaw
-# turns each rock a different way so they don't all look the same.
+# What can be placed: the mesh, its scale in the mesh's own axes (y up) and the link's pose inside the model.
+# Both are about 1 m tall: the LiDAR is 0.8 m up and its lowest beam points 15 deg down, so it passes 0.4 m
+# above the ground at the stop distance and higher still as the robot creeps closer. A shorter obstacle drops
+# out of view once the robot stops for it. Each is also one of the camera's YOLO classes ("Rock",
+# "Fallen Tree").
+OBSTACLE_TYPES = {
+    # The trail world's Grey_Rock, narrower than the world's own rocks (scale 0.5, about 2 m across) so there is
+    # room to go around it: about 0.72 x 0.83 m across and 0.97 m tall. The link is turned +90 deg about x like
+    # in Grey_Rock's model.sdf (the mesh is y-up).
+    "rock": dict(label="Rock", mesh="model://Grey_Rock/Mesh/Grey_Rock.obj", scale=(0.15, 0.4, 0.15),
+                 link_pose="0 0 0 1.5708 0 0"),
+    # The trail world's Tree laid along the model's y axis instead of stood up, tipped 15 deg so the trunk's
+    # base rests on the ground and the crown is partly sunk into it: about 2.1 m long, 1.2 m across the crown
+    # and 1.1 m tall at the crown end. The link is shifted back by half its length so it is centred on the spot.
+    "fallen_tree": dict(label="Fallen Tree", mesh="model://Tree/Mesh/Tree.obj", scale=(0.35, 0.35, 0.35),
+                        link_pose="0 -1.01 0.115 0.262 0 0"),
+}
+DEFAULT_OBSTACLE = "rock"
+
+# The model's yaw turns each obstacle a different way so they don't all look the same.
 _SDF = ("<?xml version='1.0'?>"
         "<sdf version='1.8'><model name='{name}'><static>true</static>"
         "<pose>{x:.3f} {y:.3f} 0 0 0 {yaw:.3f}</pose>"
-        "<link name='link'><pose>0 0 0 1.5708 0 0</pose>"
-        "<collision name='collision'><geometry><mesh><uri>{mesh}</uri><scale>{a} {u} {a}</scale></mesh>"
+        "<link name='link'><pose>{link_pose}</pose>"
+        "<collision name='collision'><geometry><mesh><uri>{mesh}</uri><scale>{sx} {sy} {sz}</scale></mesh>"
         "</geometry></collision>"
-        "<visual name='visual'><geometry><mesh><uri>{mesh}</uri><scale>{a} {u} {a}</scale></mesh>"
+        "<visual name='visual'><geometry><mesh><uri>{mesh}</uri><scale>{sx} {sy} {sz}</scale></mesh>"
         "</geometry></visual>"
         "</link></model></sdf>")
 
 
-def build_obstacle_sdf(name, x_m, y_m):
+def build_obstacle_sdf(name, x_m, y_m, kind=DEFAULT_OBSTACLE):
+    spec = OBSTACLE_TYPES[kind]
+    sx, sy, sz = spec["scale"]
     return _SDF.format(name=name, x=x_m, y=y_m, yaw=random.uniform(-math.pi, math.pi),
-                       mesh=OBSTACLE_MESH, a=OBSTACLE_SCALE_ACROSS, u=OBSTACLE_SCALE_UP)
+                       link_pose=spec["link_pose"], mesh=spec["mesh"], sx=sx, sy=sy, sz=sz)
 
 
 def _pb_string(text):
@@ -71,10 +84,10 @@ class SimObstacleSpawner:
         self._session = int(time.time())
 
     # ---------------- public API (non-blocking) ----------------
-    def spawn(self, x_cm, y_cm):
-        """Create an obstacle at map position (x_cm, y_cm). Returns its name."""
+    def spawn(self, x_cm, y_cm, kind=DEFAULT_OBSTACLE):
+        """Create an obstacle (a key of OBSTACLE_TYPES) at map position (x_cm, y_cm). Returns its name."""
         name = f"tb_obstacle_{self._session}_{next(self._counter)}"
-        threading.Thread(target=self._spawn_job, args=(name, x_cm / 100.0, y_cm / 100.0),
+        threading.Thread(target=self._spawn_job, args=(name, x_cm / 100.0, y_cm / 100.0, kind),
                          daemon=True).start()
         return name
 
@@ -86,7 +99,7 @@ class SimObstacleSpawner:
             threading.Thread(target=self._remove_job, args=(names,), daemon=True).start()
 
     # ---------------- workers ----------------
-    def _spawn_job(self, name, x_m, y_m):
+    def _spawn_job(self, name, x_m, y_m, kind):
         cli = self._find_cli()
         if cli is None:
             return self._fail("Couldn't place the obstacle in the simulation: Gazebo's command line tool "
@@ -98,13 +111,14 @@ class SimObstacleSpawner:
             return self._fail("Couldn't place the obstacle in the simulation: no running Gazebo world "
                               "found - is the simulation running?")
 
-        sdf = build_obstacle_sdf(name, x_m, y_m)
+        sdf = build_obstacle_sdf(name, x_m, y_m, kind)
         request = f'sdf: "{_pb_string(sdf)}" name: "{name}"'
         ok, detail = self._call(tool, f"/world/{world}/create", f"{prefix}.msgs.EntityFactory", request)
         if ok:
             with self._lock:
                 self._names.append(name)
-            self.results.put((True, f"Spawned in the simulation at ({x_m:.2f} m, {y_m:.2f} m)."))
+            self.results.put((True, f"{OBSTACLE_TYPES[kind]['label']} spawned in the simulation at "
+                                    f"({x_m:.2f} m, {y_m:.2f} m)."))
         else:
             self._fail(f"Couldn't place the obstacle in the simulation: it wasn't accepted ({detail})")
 
