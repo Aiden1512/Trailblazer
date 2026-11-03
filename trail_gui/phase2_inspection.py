@@ -29,15 +29,18 @@ to the previous junction; "Go Around" has Nav2 replan around the obstacle and
 carry on along the trail, backtracking only if Nav2 can't get past. It can be
 changed at any time and applies from the next obstacle.
 
-The Robot Status section shows the real robot's state: the obstacle detector's
-warn/stop flags, the mission manager's latest status line, and the camera
+The Mission section shows mission_manager's latest status line and a bar of its
+exploration percentage (/husky1/mission_progress). The Robot section shows the
+obstacle detector's warn/stop flags, the robot's live position and the camera
 snapshot taken when an obstacle stop activates (see mission_status.py and
-camera_feed.py).
+camera_feed.py). The map key lives in a pop-out window ("Map Legend",
+legend_window.py) to keep the panel short.
 """
 import tkinter as tk
 from tkinter import ttk
 
 from camera_panel import CameraPanel
+from legend_window import LegendWindow
 from map_canvas import MapCanvas
 from robot_pose import STATE_COLORS
 import mission_graph
@@ -76,6 +79,7 @@ class Phase2Frame(ttk.Frame):
         self.placing_obstacles = False
         self.go_around = False      # obstacle mode: False = backtrack to the junction (default), True = Nav2 goes round
         self._graph = None         # the mission's trail network (mission_graph.py)
+        self._legend_window = None  # opened on demand, see _open_legend()
 
         self._build_layout()
         self._poll()
@@ -127,50 +131,48 @@ class Phase2Frame(ttk.Frame):
         right = ttk.Frame(main)
         right.pack(side="left", fill="y", padx=(14, 0))
 
-        tk.Button(right, text="< Back to Start", command=self.on_back, cursor="hand2",
-                  font=("Arial", 10, "bold"), padx=10, pady=3, relief="raised", bd=2).pack(anchor="w", pady=(0, 6))
+        small_btn = dict(cursor="hand2", font=("Arial", 10, "bold"), padx=8, pady=3, relief="raised", bd=2)
+        nav = ttk.Frame(right)
+        nav.pack(anchor="w", fill="x", pady=(0, 10))
+        tk.Button(nav, text="< Back", command=self.on_back, **small_btn).pack(side="left")
         if self.on_open_camera is not None:
-            tk.Button(right, text="View Live Camera", command=self.on_open_camera, cursor="hand2",
-                      font=("Arial", 10, "bold"), padx=10, pady=3, relief="raised", bd=2).pack(anchor="w", pady=(0, 12))
+            tk.Button(nav, text="Live Camera", command=self.on_open_camera, **small_btn).pack(side="left", padx=6)
+        tk.Button(nav, text="Map Legend", command=self._open_legend, **small_btn).pack(side="left")
 
-        ttk.Label(right, text="Status", font=("Arial", 11, "bold")).pack(anchor="w")
-        self.sim_var = tk.StringVar()
-        self.pos_var = tk.StringVar(value="Robot position: waiting for the simulation")
-        self.sim_label = ttk.Label(right, textvariable=self.sim_var, wraplength=250, justify="left")
-        self.sim_label.pack(anchor="w")
-        ttk.Label(right, textvariable=self.pos_var, wraplength=250).pack(anchor="w", pady=(0, 6))
-        self.phase_var = tk.StringVar(value="Idle")
-        self.route_var = tk.StringVar(value="-")
-        self.progress_var = tk.StringVar(value="Exploration: 0%")
-        ttk.Label(right, textvariable=self.phase_var, wraplength=230).pack(anchor="w")
-        ttk.Label(right, textvariable=self.route_var, wraplength=230).pack(anchor="w")
-        ttk.Label(right, textvariable=self.progress_var).pack(anchor="w", pady=(0, 10))
+        # Mission: what mission_manager is doing and how much of the network it has explored
+        ttk.Label(right, text="Mission", font=("Arial", 11, "bold")).pack(anchor="w")
+        self.mission_var = tk.StringVar(value="Ready - review the map, place obstacles, then start.")
+        ttk.Label(right, textvariable=self.mission_var, wraplength=300,
+                  justify="left").pack(anchor="w", pady=(0, 4))
+        bar_row = ttk.Frame(right)
+        bar_row.pack(anchor="w", fill="x")
+        ttk.Style(self).configure("Exploration.Horizontal.TProgressbar", background="#2e8b32",
+                                  troughcolor="#dcdcdc", thickness=16)
+        self.exploration_bar = ttk.Progressbar(bar_row, style="Exploration.Horizontal.TProgressbar",
+                                               maximum=100, length=240)
+        self.exploration_bar.pack(side="left")
+        self.exploration_var = tk.StringVar(value="0%")
+        ttk.Label(bar_row, textvariable=self.exploration_var, width=5,
+                  font=("Arial", 10, "bold")).pack(side="left", padx=(6, 0))
+        self.progress_var = tk.StringVar(value="No trail network loaded")
+        ttk.Label(right, textvariable=self.progress_var, wraplength=300, foreground="#555555",
+                  font=("Arial", 9)).pack(anchor="w", pady=(2, 12))
 
-        ttk.Label(right, text="Robot Status", font=("Arial", 11, "bold")).pack(anchor="w")
+        # Robot: simulation link, position, obstacle detector and the last obstacle it photographed
+        ttk.Label(right, text="Robot", font=("Arial", 11, "bold")).pack(anchor="w")
         self.obstacle_banner = tk.Label(right, font=("Arial", 11, "bold"), fg="white", anchor="w",
-                                        padx=8, pady=4, wraplength=280, justify="left")
+                                        padx=8, pady=4, wraplength=300, justify="left")
         self.obstacle_banner.pack(anchor="w", fill="x")
-        self.mission_var = tk.StringVar(value="Mission: no updates from mission_manager yet")
-        ttk.Label(right, textvariable=self.mission_var, wraplength=280,
-                  justify="left").pack(anchor="w", pady=(2, 0))
-        self.mission_progress_var = tk.StringVar(value="Mission completion: -")
-        ttk.Label(right, textvariable=self.mission_progress_var).pack(anchor="w", pady=(0, 10))
         self._show_obstacle_level(None, "Obstacle detector not connected")
-
-        ttk.Label(right, text="Legend", font=("Arial", 11, "bold")).pack(anchor="w")
-        ttk.Label(right, justify="left",
-                  text="Blue circle Jn = junction, Tn = trail (as in the trail file)\n"
-                       "Black = not inspected yet\nGreen = inspected\n"
-                       "Orange = blocked, other side still to check\nRed = blocked\n"
-                       "Purple dashes = blocked at both ends, can't be checked\n"
-                       "Red dot = obstacle found on a trail (blocked, or gone around)\n"
-                       "Purple ring = one of the two obstacles cutting off a trail\n"
-                       "Red X = obstacle you placed (also in the sim)\n"
-                       "Dark circle = robot (live from simulation)").pack(anchor="w", pady=(0, 10))
-
-
+        self.sim_var = tk.StringVar()
+        self.pos_var = tk.StringVar(value="Position: waiting for the simulation")
+        self.sim_label = ttk.Label(right, textvariable=self.sim_var, wraplength=300, justify="left",
+                                   font=("Arial", 9))
+        self.sim_label.pack(anchor="w", pady=(2, 0))
+        ttk.Label(right, textvariable=self.pos_var, font=("Arial", 9)).pack(anchor="w")
         self.obstacle_name_var = tk.StringVar(value="Detected obstacle: None")
-        ttk.Label(right, textvariable=self.obstacle_name_var, font=("Arial", 11, "bold"), wraplength=280).pack(anchor="w", pady=(0, 5))
+        ttk.Label(right, textvariable=self.obstacle_name_var, font=("Arial", 10, "bold"),
+                  wraplength=300).pack(anchor="w", pady=(4, 4))
 
         if self.snapshot_feed is not None:
             CameraPanel(right, self.snapshot_feed, title="Obstacle Snapshot",
@@ -203,8 +205,8 @@ class Phase2Frame(ttk.Frame):
             except (OSError, ValueError) as exc:
                 self._log(f"Can't show the trail network: {exc}")
         self._set_graph(graph)
-        self.phase_var.set("Ready - review the map, place obstacles, then start.")
-        self.route_var.set("-")
+        if self._last_mission_text is None:
+            self.mission_var.set("Ready - review the map, place obstacles, then start.")
 
     def _set_graph(self, graph):
         self._graph = graph
@@ -212,7 +214,7 @@ class Phase2Frame(ttk.Frame):
             inspected, blocked, todo = mission_graph.summary(graph)
             junctions = sum(1 for n in graph["junctions"] if n["junction"] >= 0)
             cut_off = len(mission_graph.cut_off_trails(graph))
-            self.progress_var.set(f"{junctions} junctions, {len(graph['trails'])} trails: {inspected} inspected, "
+            self.progress_var.set(f"{len(graph['trails'])} trails, {junctions} junctions - {inspected} inspected, "
                                   f"{blocked} blocked" + (f" ({cut_off} at both ends)" if cut_off else "") +
                                   f", {todo} to go")
         else:
@@ -266,7 +268,7 @@ class Phase2Frame(ttk.Frame):
         self._log("Asking mission_manager to start the real inspection...")
         self.status_feed.request_obstacle_mode(self.go_around)   # in case mission_manager restarted since it was set
         self.status_feed.request_start()       # the reply is logged by _poll_robot_status
-        self.phase_var.set("Mission: autonomous inspection requested")
+        self.mission_var.set("Autonomous inspection requested...")
 
     # ---------------- mission controls ----------------
     # mission_manager decides whether each makes sense right now (e.g. Resume when not stopped); its reply is
@@ -277,7 +279,7 @@ class Phase2Frame(ttk.Frame):
             return
         self._log("E-STOP pressed: stopping the robot...")
         self.status_feed.request_pause()
-        self.phase_var.set("Mission: E-STOPPED")
+        self.mission_var.set("E-STOP requested...")
 
     def _resume(self):
         if self.status_feed is None:
@@ -285,7 +287,7 @@ class Phase2Frame(ttk.Frame):
             return
         self._log("Asking mission_manager to resume...")
         self.status_feed.request_resume()
-        self.phase_var.set("Mission: resume requested")
+        self.mission_var.set("Resume requested...")
 
     def _return_home(self):
         if self.status_feed is None:
@@ -293,7 +295,7 @@ class Phase2Frame(ttk.Frame):
             return
         self._log("Asking mission_manager to skip the remaining trails and return home...")
         self.status_feed.request_return_home()
-        self.phase_var.set("Mission: return home requested")
+        self.mission_var.set("Return home requested...")
 
     def _toggle_obstacle_mode_setting(self):
         self.go_around = not self.go_around
@@ -340,8 +342,8 @@ class Phase2Frame(ttk.Frame):
                 feed_state, text = self.pose_feed.status()
                 self.sim_var.set("Simulation: " + text)
                 self.sim_label.configure(foreground=STATE_COLORS.get(feed_state, "black"))
-            self.pos_var.set("Robot position: waiting for the simulation" if pose is None
-                             else f"Robot position: ({int(pose[0])}, {int(pose[1])}) cm")
+            self.pos_var.set("Position: waiting for the simulation" if pose is None
+                             else f"Position: ({int(pose[0])}, {int(pose[1])}) cm")
             self._draw_real_robot()
         try:
             self.after(POLL_MS, self._poll)
@@ -355,6 +357,8 @@ class Phase2Frame(ttk.Frame):
             while not self.status_feed.command_results.empty():
                 ok, message = self.status_feed.command_results.get_nowait()
                 self._log(("Robot: " if ok else "Not done: ") + message)
+                if self._last_mission_text is not None:     # replace the "...requested" placeholder
+                    self.mission_var.set(self._last_mission_text)
             level, mission_text = self.status_feed.get()
             if level != self._last_obstacle_level:
                 if level in OBSTACLE_LOG:
@@ -362,12 +366,12 @@ class Phase2Frame(ttk.Frame):
                 self._last_obstacle_level = level
             self._show_obstacle_level(level, self.status_feed.status()[1])
             if mission_text is not None and mission_text != self._last_mission_text:
-                self.mission_var.set("Mission: " + mission_text)
+                self.mission_var.set(mission_text)
                 self._log("Mission: " + mission_text)
                 self._last_mission_text = mission_text
             progress = self.status_feed.get_progress()
             if progress is not None:
-                self.mission_progress_var.set(f"Mission completion: {progress:.0f}%")
+                self._show_exploration(progress)
             graph = self.status_feed.get_graph()
             if graph is not None and graph != self._graph:
                 known = {t["edge"] for t in mission_graph.cut_off_trails(self._graph)} if self._graph else set()
@@ -398,6 +402,23 @@ class Phase2Frame(ttk.Frame):
                 if self.status_feed is not None:
                     name = self.status_feed.get_front_obstacle()
                     self.obstacle_name_var.set(f"Detected obstacle: {name}")
+
+    def _show_exploration(self, percent):
+        """mission_manager's exploration percentage: inspected trails count fully, blocked ones half until
+        their far side has been checked too (TrailGraph::explorationPercentage)."""
+        self.exploration_bar["value"] = percent
+        self.exploration_var.set(f"{percent:.0f}%")
+
+    def _open_legend(self):
+        """Show the map legend window, or bring it to the front if it's already open."""
+        if self._legend_window is not None:
+            self._legend_window.deiconify()
+            self._legend_window.lift()
+            return
+        self._legend_window = LegendWindow(self, on_closed=self._legend_closed)
+
+    def _legend_closed(self):
+        self._legend_window = None
 
     def _show_obstacle_level(self, level, detector_text):
         text, color = OBSTACLE_BANNER.get(level, (detector_text, "#757575"))
