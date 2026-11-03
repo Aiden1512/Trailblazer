@@ -202,12 +202,12 @@ local_costmap:
         # overhanging branches. The flattened scan is used only to clear cells.
         observation_sources: points scan
         points:
-          topic: scan/points
+          topic: scan/points_filtered
           data_type: PointCloud2
           marking: true
           clearing: false
-          min_obstacle_height: 0.10
-          max_obstacle_height: 0.85
+          min_obstacle_height: -0.04
+          max_obstacle_height: 0.74
           obstacle_max_range: 10.0
           obstacle_min_range: 0.0
         scan:
@@ -262,12 +262,12 @@ global_costmap:
         # overhanging branches. The flattened scan is used only to clear cells.
         observation_sources: points scan
         points:
-          topic: scan/points
+          topic: scan/points_filtered
           data_type: PointCloud2
           marking: true
           clearing: false
-          min_obstacle_height: 0.10
-          max_obstacle_height: 0.85
+          min_obstacle_height: -0.04
+          max_obstacle_height: 0.74
           obstacle_max_range: 10.0
           obstacle_min_range: 0.0
         scan:
