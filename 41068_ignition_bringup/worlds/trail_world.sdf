@@ -131,7 +131,7 @@
     <include>
       <uri>model://Tree</uri>
       <name>Tree</name>
-      <pose>-2 4 0 0 0 0</pose>
+      <pose>-2 4.4 0 0 0 0</pose>
     </include>
 
    
