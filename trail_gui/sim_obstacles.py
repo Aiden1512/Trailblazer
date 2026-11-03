@@ -31,9 +31,9 @@ import time
 # rocks (scale 0.5, about 2 m across) so there is room to go around it, but about 1 m tall: the LiDAR is
 # 0.8 m up and its lowest beam points 15 deg down, so it passes 0.4 m above the ground at the stop distance
 # and higher still as the robot creeps closer. A shorter rock drops out of view once the robot stops for it.
-# Scale is in the mesh's own axes (y up): about 1.0 x 1.15 m across and 0.97 m tall.
+# Scale is in the mesh's own axes (y up): about 0.72 x 0.83 m across and 0.97 m tall.
 OBSTACLE_MESH = "model://Grey_Rock/Mesh/Grey_Rock.obj"
-OBSTACLE_SCALE_ACROSS = 0.25
+OBSTACLE_SCALE_ACROSS = 0.18
 OBSTACLE_SCALE_UP = 0.4
 CALL_TIMEOUT_MS = 5000
 
