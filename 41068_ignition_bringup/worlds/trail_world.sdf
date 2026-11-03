@@ -177,7 +177,7 @@
     <include>
       <uri>model://Grey_Rock2</uri>
       <name>Grey_Rock2</name>
-      <pose>-4 -2 0 0 0 0</pose>
+      <pose>-3 -2 0 0 0 0</pose>
     </include>
 
     <include>
@@ -221,7 +221,7 @@
     <include>
       <uri>model://Birch2</uri>
       <name>Birch2-14</name>
-      <pose>-3.54076 0.105537 0 0 -0 0</pose>
+      <pose>-3.54076 0.605537 0 0 -0 0</pose>
     </include>
 
     <include>
