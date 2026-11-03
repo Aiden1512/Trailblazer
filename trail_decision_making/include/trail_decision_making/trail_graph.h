@@ -43,6 +43,9 @@ namespace trail_decision_making
         // BLOCKED part way through inspecting it: the end it still has to be inspected from, up to the
         // obstacle (-1: nothing left to check, e.g. checked from both ends)
         int far_side_node = -1;
+        // BLOCKED from both ends: the stretch between the two obstacles, which the robot can't reach to
+        // inspect from either side (empty if there is none)
+        std::vector<Waypoint> inaccessible;
     };
 
     struct ClosestEdgeResult
@@ -79,6 +82,13 @@ namespace trail_decision_making
 
         void setFarSideNode(int edge_id, int node_id);
         size_t pendingFarSides() const; // blocked edges whose far side hasn't been checked yet
+
+        // Distance (m) along the edge's waypoints, from from_node, to the point on the edge closest to (x, y)
+        double distanceAlongEdge(int edge_id, double x, double y) const;
+        // The edge's waypoints between two distances along it (from from_node), the ends interpolated
+        std::vector<Waypoint> edgeSection(int edge_id, double start, double end) const;
+        void setInaccessibleSection(int edge_id, const std::vector<Waypoint> &section);
+        size_t countInaccessibleSections() const;
 
         size_t countEdges(EdgeStatus status) const;
 

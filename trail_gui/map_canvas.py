@@ -179,6 +179,13 @@ class MapCanvas(tk.Canvas):
             for x, y in trail["waypoints"]:
                 flat.extend(self.world_to_screen(x * 100.0, y * 100.0))
             self.create_line(*flat, fill=trail_color(trail), width=4, capstyle="round", joinstyle="round", tag=tag)
+            gap = trail.get("inaccessible") or []
+            if len(gap) >= 2:   # blocked at both ends: the stretch between the obstacles can't be checked
+                flat = []
+                for x, y in gap:
+                    flat.extend(self.world_to_screen(x * 100.0, y * 100.0))
+                self.create_line(*flat, fill="white", width=8, capstyle="round", joinstyle="round", tag=tag)
+                self.create_line(*flat, fill="#7b1fa2", width=6, dash=(6, 4), tag=tag)
             for x, y in trail["waypoints"][1:-1]:
                 sx, sy = self.world_to_screen(x * 100.0, y * 100.0)
                 self.create_oval(sx - 2, sy - 2, sx + 2, sy + 2, fill="white", outline="", tag=tag)
@@ -197,11 +204,14 @@ class MapCanvas(tk.Canvas):
                 self.create_oval(sx - 4, sy - 4, sx + 4, sy + 4, fill="#9e9e9e", outline="#424242", tag=tag)
 
     def draw_blocked_points(self, points, tag="blocked"):
-        """Red dots where the robot found a trail blocked; points are (x_cm, y_cm, ...)."""
+        """Red dots where the robot found a trail blocked; points are (x_cm, y_cm, ..., bounds_gap). The two
+        obstacles blocking a trail at both ends get a purple ring, matching the stretch between them."""
         self.delete(tag)
         r = 7
         for point in points:
             sx, sy = self.world_to_screen(point[0], point[1])
+            if point[-1]:
+                self.create_oval(sx - r - 4, sy - r - 4, sx + r + 4, sy + r + 4, outline="#7b1fa2", width=3, tag=tag)
             self.create_oval(sx - r, sy - r, sx + r, sy + r, fill="#e53935", outline="#7f0000", width=2, tag=tag)
 
     def draw_robot(self, x, y, tag="robot", color="#222222"):

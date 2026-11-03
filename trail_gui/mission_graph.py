@@ -11,7 +11,7 @@ Both give the same structure, positions in metres in the map frame:
     {"file": path,
      "junctions": [{"node": 0, "junction": 1, "x": .., "y": ..}, ...],   # junction -1 = trail dead end
      "trails": [{"edge": 0, "trail": 1, "from": 0, "to": 1, "status": "unvisited",
-                 "far_side": -1, "waypoints": [[x, y], ...]}, ...]}
+                 "far_side": -1, "waypoints": [[x, y], ...], "inaccessible": [[x, y], ...]}, ...]}
 load_trail_file() mirrors TrailGraph::loadFromYaml (trail_graph.cpp), so edge numbers match.
 """
 import math
@@ -85,6 +85,7 @@ def load_trail_file(path):
             "status": "unvisited",
             "far_side": -1,
             "waypoints": wps,
+            "inaccessible": [],
         })
     if not trails:
         raise ValueError("trail file has no usable trails")
@@ -98,6 +99,11 @@ def trail_color(trail):
     if trail["status"] == "blocked":
         return "#e08e00" if trail.get("far_side", -1) >= 0 else "#c0392b"   # orange: far side still to check
     return "#111111"                                      # black: not inspected yet
+
+
+def cut_off_trails(graph):
+    """Trails blocked at both ends, with a stretch between the two obstacles the robot can't reach."""
+    return [t for t in graph["trails"] if len(t.get("inaccessible") or []) >= 2]
 
 
 def summary(graph):

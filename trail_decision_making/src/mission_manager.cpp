@@ -65,6 +65,7 @@ namespace trail_decision_making
         blocked_points_pub_ = create_publisher<std_msgs::msg::String>(
             "/husky1/blocked_points", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
         blocked_marker_ahead_ = declare_parameter<double>("blocked_marker_ahead", 1.2);
+        inaccessible_min_gap_ = declare_parameter<double>("inaccessible_min_gap", 2.0);
         follow_trail_timer_ = create_wall_timer(200ms, [this]()
                                                 {
             std_msgs::msg::Bool msg;
@@ -1278,6 +1279,7 @@ namespace trail_decision_making
         }
         going_around_ = false;
         const bool far_side_next = markCurrentEdgeBlocked();
+        const double cut_off = checking_far_side_ ? flagInaccessibleSection() : 0.0;
         route_.clear(); // the old route may go through the blocked edge
         inspecting_edge_ = false;
         checking_far_side_ = false;
@@ -1285,7 +1287,12 @@ namespace trail_decision_making
                     reason.c_str(), current_edge_id_, junctionName(current_node_id_).c_str(),
                     far_side_next ? " (will check it from the other end later)" : "");
         publishStatus(trailName(current_edge_id_) + " blocked by an obstacle" +
-                      (far_side_next ? "; will check it from the other end" : "") + " - " + progressText());
+                      (far_side_next ? "; will check it from the other end" : "") +
+                      (cut_off > 0.0 ? "; blocked at both ends, so the " +
+                                           std::to_string(static_cast<int>(std::round(cut_off))) +
+                                           " m between the two obstacles can't be checked"
+                                     : "") +
+                      " - " + progressText());
 
         obstacle_avoidance_active_ = true; // the obstacle stays in the stop range while we turn away from it
         driveBackToJunction();
@@ -1321,6 +1328,48 @@ namespace trail_decision_making
         recordBlockedPoint();
         publishProgress();
         return first_time;
+    }
+
+    // Checking a blocked edge from its far side and stopped by an obstacle again: the robot has now been blocked
+    // coming from each end, so the stretch of trail between the two obstacles can't be reached from either side.
+    // Flag both obstacles and record that stretch on the edge, for the GUI. Returns its length (m), or 0 if the
+    // two are the same obstacle seen from each side (recordBlockedPoint merged them, or they are very close).
+    double MissionManager::flagInaccessibleSection()
+    {
+        const int far_end = planner_.otherEnd(current_edge_id_, current_node_id_);
+        auto found_from = [this](int node)
+        {
+            return std::find_if(blocked_points_.begin(), blocked_points_.end(), [&](const BlockedPoint &b)
+                                { return b.edge == current_edge_id_ && b.from_node == node && !b.avoided; });
+        };
+        const auto near = found_from(current_node_id_);
+        const auto far = found_from(far_end);
+        if (near == blocked_points_.end() || far == blocked_points_.end() || near == far)
+        {
+            RCLCPP_INFO(get_logger(), "Edge %d is blocked by the same obstacle from both ends", current_edge_id_);
+            return 0.0;
+        }
+        double start = graph_.distanceAlongEdge(current_edge_id_, near->x, near->y);
+        double end = graph_.distanceAlongEdge(current_edge_id_, far->x, far->y);
+        if (start > end)
+        {
+            std::swap(start, end);
+        }
+        if (end - start < inaccessible_min_gap_)
+        {
+            RCLCPP_INFO(get_logger(), "Edge %d: obstacles from each end are %.1f m apart, taken to be the same one",
+                        current_edge_id_, end - start);
+            return 0.0;
+        }
+        graph_.setInaccessibleSection(current_edge_id_, graph_.edgeSection(current_edge_id_, start, end));
+        near->bounds_gap = true;
+        far->bounds_gap = true;
+        RCLCPP_WARN(get_logger(), "Edge %d blocked at both ends: obstacles at (%.2f, %.2f) and (%.2f, %.2f), "
+                                  "%.1f m between them can't be inspected",
+                    current_edge_id_, far->x, far->y, near->x, near->y, end - start);
+        publishBlockedPoints();
+        publishGraph();
+        return end - start;
     }
 
     // The obstacle is about blocked_marker_ahead_ in front of the robot when it stops for it. avoided: Nav2 is
@@ -1361,8 +1410,8 @@ namespace trail_decision_making
         }
     }
 
-    // JSON list for the GUI: [{"edge": 2, "x": -5.1, "y": -1.2, "from": "junction 3", "avoided": false}, ...]
-    // in the map frame (metres)
+    // JSON list for the GUI: [{"edge": 2, "x": -5.1, "y": -1.2, "from": "junction 3", "avoided": false,
+    // "bounds_gap": false}, ...] in the map frame (metres)
     void MissionManager::publishBlockedPoints()
     {
         std::ostringstream json;
@@ -1373,7 +1422,7 @@ namespace trail_decision_making
             const TrailEdge *edge = graph_.getEdge(b.edge);
             json << (i ? ", " : "") << "{\"edge\": " << b.edge << ", \"trail\": " << (edge ? edge->trail_id : -1) << ", \"x\": " << b.x << ", \"y\": " << b.y
                  << ", \"from\": \"" << junctionName(b.from_node) << "\", \"avoided\": " << (b.avoided ? "true" : "false")
-                 << "}";
+                 << ", \"bounds_gap\": " << (b.bounds_gap ? "true" : "false") << "}";
         }
         json << "]";
         std_msgs::msg::String msg;
@@ -1412,13 +1461,16 @@ namespace trail_decision_making
         const size_t blocked = graph_.countEdges(EdgeStatus::BLOCKED);
         // uninspected trails, and blocked trails whose far side couldn't be reached
         const size_t unreachable = graph_.countEdges(EdgeStatus::UNINSPECTED) + graph_.pendingFarSides();
-        RCLCPP_INFO(get_logger(), "Mission complete: %s, %zu blocked, %zu unreachable; robot is home",
-                    progressText().c_str(), blocked, unreachable);
+        const size_t cut_off = graph_.countInaccessibleSections(); // blocked at both ends
+        RCLCPP_INFO(get_logger(), "Mission complete: %s, %zu blocked (%zu at both ends), %zu unreachable; robot is home",
+                    progressText().c_str(), blocked, cut_off, unreachable);
         publishProgress();
         publishStatus("Mission complete - " + progressText() + " (" +
                       std::to_string(graph_.countEdges(EdgeStatus::INSPECTED)) + " inspected, " +
                       std::to_string(blocked) + " blocked, " + std::to_string(unreachable) +
-                      (home_requested_ ? " skipped" : " unreachable") + "). Robot is home");
+                      (home_requested_ ? " skipped" : " unreachable") +
+                      (cut_off > 0 ? ", " + std::to_string(cut_off) + " cut off between two obstacles" : "") +
+                      "). Robot is home");
     }
 
     // Completion = trails that have been resolved (inspected, or found blocked) out of all trails
@@ -1433,8 +1485,9 @@ namespace trail_decision_making
     // JSON for the GUI (map frame, metres):
     // {"file": ..., "junctions": [{"node": 0, "junction": 1, "x": .., "y": ..}, ...],
     //  "trails": [{"edge": 0, "trail": 1, "from": 0, "to": 1, "status": "inspected", "far_side": -1,
-    //              "waypoints": [[x, y], ...]}, ...]}
-    // "junction" is -1 for a trail's dead end; status is unvisited / inspected / blocked.
+    //              "waypoints": [[x, y], ...], "inaccessible": [[x, y], ...]}, ...]}
+    // "junction" is -1 for a trail's dead end; status is unvisited / inspected / blocked. "inaccessible" is the
+    // stretch between two obstacles of a trail blocked at both ends, empty otherwise.
     void MissionManager::publishGraph()
     {
         std::ostringstream json;
@@ -1459,6 +1512,11 @@ namespace trail_decision_making
             for (size_t w = 0; w < e.waypoints.size(); ++w)
             {
                 json << (w ? ", " : "") << "[" << e.waypoints[w].x << ", " << e.waypoints[w].y << "]";
+            }
+            json << "], \"inaccessible\": [";
+            for (size_t w = 0; w < e.inaccessible.size(); ++w)
+            {
+                json << (w ? ", " : "") << "[" << e.inaccessible[w].x << ", " << e.inaccessible[w].y << "]";
             }
             json << "]}";
         }

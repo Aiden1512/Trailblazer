@@ -162,7 +162,9 @@ class Phase2Frame(ttk.Frame):
                   text="Blue circle Jn = junction, Tn = trail (as in the trail file)\n"
                        "Black = not inspected yet\nGreen = inspected\n"
                        "Orange = blocked, other side still to check\nRed = blocked\n"
+                       "Purple dashes = blocked at both ends, can't be checked\n"
                        "Red dot = obstacle found on a trail (blocked, or gone around)\n"
+                       "Purple ring = one of the two obstacles cutting off a trail\n"
                        "Red X = obstacle you placed (also in the sim)\n"
                        "Dark circle = robot (live from simulation)").pack(anchor="w", pady=(0, 10))
 
@@ -209,8 +211,10 @@ class Phase2Frame(ttk.Frame):
         if graph is not None:
             inspected, blocked, todo = mission_graph.summary(graph)
             junctions = sum(1 for n in graph["junctions"] if n["junction"] >= 0)
+            cut_off = len(mission_graph.cut_off_trails(graph))
             self.progress_var.set(f"{junctions} junctions, {len(graph['trails'])} trails: {inspected} inspected, "
-                                  f"{blocked} blocked, {todo} to go")
+                                  f"{blocked} blocked" + (f" ({cut_off} at both ends)" if cut_off else "") +
+                                  f", {todo} to go")
         else:
             self.progress_var.set("No trail network loaded")
         self._redraw()
@@ -366,12 +370,18 @@ class Phase2Frame(ttk.Frame):
                 self.mission_progress_var.set(f"Mission completion: {progress:.0f}%")
             graph = self.status_feed.get_graph()
             if graph is not None and graph != self._graph:
+                known = {t["edge"] for t in mission_graph.cut_off_trails(self._graph)} if self._graph else set()
+                for trail in mission_graph.cut_off_trails(graph):
+                    if trail["edge"] not in known:
+                        self._log(f"Trail {trail['trail']} blocked at both ends: the stretch between the two "
+                                  f"obstacles can't be checked.")
                 self._set_graph(graph)           # trail statuses changed (or mission_manager just started)
             blocked = self.status_feed.get_blocked_points()
             if blocked != self._blocked_points:
-                for x, y, edge, origin, avoided in blocked:
-                    if (x, y, edge, origin, avoided) in self._blocked_points:
-                        continue                 # already logged
+                logged = {p[:5] for p in self._blocked_points}
+                for x, y, edge, origin, avoided, _bounds_gap in blocked:
+                    if (x, y, edge, origin, avoided) in logged:
+                        continue                 # already logged (or only now flagged as cutting off a trail)
                     if avoided:
                         self._log(f"Obstacle on trail {edge} at ({x / 100:.1f}, {y / 100:.1f}) m, "
                                   f"found coming from {origin}: going around it.")

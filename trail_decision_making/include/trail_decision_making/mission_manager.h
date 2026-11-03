@@ -85,6 +85,7 @@ namespace trail_decision_making
         void startBacktrackToJunction(const std::string &reason);
         void driveBackToJunction();
         bool markCurrentEdgeBlocked();
+        double flagInaccessibleSection();
         void recordBlockedPoint(bool avoided = false);
         void publishBlockedPoints();
         void startReturnHome();
@@ -129,9 +130,12 @@ namespace trail_decision_making
             double x = 0.0, y = 0.0; // map frame
             int from_node = -1;      // junction the robot was coming from when it found it
             bool avoided = false;    // Nav2 went around it, so the trail is not blocked
+            bool bounds_gap = false; // one of the two obstacles cutting off a stretch of trail between them
         };
         std::vector<BlockedPoint> blocked_points_;
         double blocked_marker_ahead_ = 1.2; // obstacle is about this far ahead of base_link when the robot stops
+        // blocked from both ends: obstacles closer than this (m) along the trail are taken to be the same one
+        double inaccessible_min_gap_ = 2.0;
         bool mission_active_ = false;
         bool obstacle_stop_active_ = false;      // latest value of the obstacle_stop topic
         bool obstacle_pause_active_ = false;     // stopped, waiting before trying to go around

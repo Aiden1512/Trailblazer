@@ -226,6 +226,85 @@ namespace trail_decision_making
                                                  { return e.status == EdgeStatus::BLOCKED && e.far_side_node >= 0; }));
     }
 
+    double TrailGraph::distanceAlongEdge(int edge_id, double x, double y) const
+    {
+        const TrailEdge *e = getEdge(edge_id);
+        if (!e || e->waypoints.empty())
+        {
+            return 0.0;
+        }
+        const auto &w = e->waypoints;
+        double best_d = std::hypot(x - w[0].x, y - w[0].y), best_s = 0.0, s = 0.0;
+        for (size_t i = 1; i < w.size(); ++i)
+        {
+            const double dx = w[i].x - w[i - 1].x, dy = w[i].y - w[i - 1].y;
+            const double len = std::hypot(dx, dy);
+            const double t = len > 1e-9 ? std::clamp(((x - w[i - 1].x) * dx + (y - w[i - 1].y) * dy) / (len * len), 0.0, 1.0) : 0.0;
+            const double d = std::hypot(x - w[i - 1].x - t * dx, y - w[i - 1].y - t * dy);
+            if (d < best_d)
+            {
+                best_d = d;
+                best_s = s + t * len;
+            }
+            s += len;
+        }
+        return best_s;
+    }
+
+    std::vector<Waypoint> TrailGraph::edgeSection(int edge_id, double start, double end) const
+    {
+        std::vector<Waypoint> section;
+        const TrailEdge *e = getEdge(edge_id);
+        if (!e || e->waypoints.size() < 2 || end <= start)
+        {
+            return section;
+        }
+        const auto &w = e->waypoints;
+        double s = 0.0;
+        for (size_t i = 1; i < w.size(); ++i)
+        {
+            const double len = std::hypot(w[i].x - w[i - 1].x, w[i].y - w[i - 1].y);
+            auto at = [&](double along)
+            {
+                const double t = len > 1e-9 ? (along - s) / len : 0.0;
+                return Waypoint{w[i - 1].x + t * (w[i].x - w[i - 1].x), w[i - 1].y + t * (w[i].y - w[i - 1].y), w[i - 1].yaw};
+            };
+            if (section.empty() && start <= s + len)
+            {
+                section.push_back(at(start));
+            }
+            if (!section.empty())
+            {
+                if (end <= s + len)
+                {
+                    section.push_back(at(end));
+                    return section;
+                }
+                section.push_back(w[i]);
+            }
+            s += len;
+        }
+        return section; // end was past the last waypoint: the section runs to it
+    }
+
+    void TrailGraph::setInaccessibleSection(int edge_id, const std::vector<Waypoint> &section)
+    {
+        for (auto &e : edges_)
+        {
+            if (e.id == edge_id)
+            {
+                e.inaccessible = section;
+                return;
+            }
+        }
+    }
+
+    size_t TrailGraph::countInaccessibleSections() const
+    {
+        return static_cast<size_t>(std::count_if(edges_.begin(), edges_.end(),
+                                                 [](const TrailEdge &e) { return !e.inaccessible.empty(); }));
+    }
+
     // Number of edges with the given status
     size_t TrailGraph::countEdges(EdgeStatus status) const
     {
@@ -240,6 +319,7 @@ namespace trail_decision_making
         {
             e.status = EdgeStatus::UNINSPECTED;
             e.far_side_node = -1;
+            e.inaccessible.clear();
         }
     }
 

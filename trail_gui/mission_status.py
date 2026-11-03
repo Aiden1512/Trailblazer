@@ -192,8 +192,9 @@ class MissionStatusFeed:
         # map frame metres -> GUI world centimetres (the map frame is lined up with the world)
         # trail id as in the trail file (what the map labels show); older mission_managers only sent the edge
         # avoided: Nav2 went around the obstacle, so the trail isn't blocked (still drawn, the obstacle is there)
+        # bounds_gap: one of two obstacles blocking the trail at both ends, cutting off the stretch between them
         blocked = [(p["x"] * 100.0, p["y"] * 100.0, p.get("trail", p.get("edge")), p.get("from", ""),
-                    p.get("avoided", False)) for p in points]
+                    p.get("avoided", False), p.get("bounds_gap", False)) for p in points]
         with self._lock:
             self._blocked_points = blocked
 
@@ -286,8 +287,9 @@ class MissionStatusFeed:
             return self._graph
 
     def get_blocked_points(self):
-        """Return [(x_cm, y_cm, edge, from_junction, avoided), ...]: where mission_manager found obstacles on
-        trails; avoided = it went around, otherwise the trail is blocked there."""
+        """Return [(x_cm, y_cm, edge, from_junction, avoided, bounds_gap), ...]: where mission_manager found
+        obstacles on trails; avoided = it went around, otherwise the trail is blocked there; bounds_gap = one of
+        the two obstacles blocking a trail at both ends."""
         with self._lock:
             return list(self._blocked_points)
 
