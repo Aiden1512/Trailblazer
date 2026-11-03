@@ -134,11 +134,7 @@
       <pose>-2 4 0 0 0 0</pose>
     </include>
 
-    <include>
-      <uri>model://Tree</uri>
-      <name>Tree-3</name>
-      <pose>7 2 0 0 0 0</pose>
-    </include>
+   
 
     <include>
       <uri>model://Tree</uri>
@@ -189,6 +185,58 @@
       <name>Grey_Rock2-1</name>
       <pose>6 -6 0 0 0 0</pose>
     </include>
+
+
+    <include>
+      <uri>model://Birch2</uri>
+      <name>Birch2-9</name>
+      <pose>0.319572 -5.07212 0.132279 -0 0 2.67411</pose>
+    </include>
+
+    <include>
+      <uri>model://Birch2</uri>
+      <name>Birch2-10</name>
+      <pose>-1.9522 2.54862 0 0 -0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Birch2</uri>
+      <name>Birch2-11</name>
+      <pose>4.8246 2.69804 0 0 -0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Birch2</uri>
+      <name>Birch2-12</name>
+      <pose>0.658278 -0.087784 0 0 -0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Birch2</uri>
+      <name>Birch2-13</name>
+      <pose>-0.651728 -1.17552 0 0 -0 0</pose>
+    </include>
+
+
+    <include>
+      <uri>model://Birch2</uri>
+      <name>Birch2-14</name>
+      <pose>-3.54076 0.105537 0 0 -0 0</pose>
+    </include>
+
+    <include>
+      <uri>model://Birch2</uri>
+      <name>Birch2-15</name>
+      <pose>-0.056798 3.19709 0 0 -0 0</pose>
+    </include>
+
+     <include>
+      <uri>model://Birch</uri>
+      <name>Birch-8</name>
+      <pose>7 2 0 0 0 0</pose>
+    </include>
+
+
 
   </world>
 
