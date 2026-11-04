@@ -60,6 +60,7 @@ WATER_STOP_TOPIC = "/husky1/water_stop"
 FRONT_OBSTACLE_TOPIC = "/husky1/front_obstacle"
 STALE_AFTER_S = 2.0                       # the detector publishes every lidar frame (~10 Hz)
 WATER_STALE_AFTER_S = 3.0                 # water_guard publishes every camera frame (~3 Hz)
+FRONT_OBSTACLE_MEMORY_S = 3.0             # how long the last obstacle YOLO saw in front still names a snapshot
 
 
 class MissionStatusFeed:
@@ -77,7 +78,7 @@ class MissionStatusFeed:
         self._water_warn = False
         self._water_stop = False
         self._last_water_time = None
-        self._front_obstacle = "None"
+        self._front_obstacle = "None"     # last class YOLO saw in front (never "None" once one is seen)
         self._last_front_obstacle_time = None
         self._startup_error = ""
         self._clients = {}                # service name -> Trigger (or SetBool) client
@@ -210,6 +211,10 @@ class MissionStatusFeed:
             self._graph = graph
 
     def _on_front_obstacle(self, msg):
+        # Ignore "None" frames: YOLO flickers between seeing and missing the obstacle, and the GUI only reads
+        # this when the snapshot arrives, which may land on a frame where it missed it.
+        if msg.data == "None":
+            return
         with self._lock:
             self._front_obstacle = msg.data
             self._last_front_obstacle_time = time.monotonic()
@@ -321,10 +326,10 @@ class MissionStatusFeed:
             name = self._front_obstacle
             last = self._last_front_obstacle_time
 
-        if last is None or time.monotonic() - last > 2.0:
+        if last is None or time.monotonic() - last > FRONT_OBSTACLE_MEMORY_S:
             return "Unknown"
 
-        return name if name != "None" else "Unknown"
+        return name
 
     def status(self):
         """Return (state, text) for the detector connection; state is one of

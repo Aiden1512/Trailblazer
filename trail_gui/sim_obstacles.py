@@ -37,9 +37,9 @@ CALL_TIMEOUT_MS = 5000
 # "Fallen Tree").
 OBSTACLE_TYPES = {
     # The trail world's Grey_Rock, narrower than the world's own rocks (scale 0.5, about 2 m across) so there is
-    # room to go around it: about 0.72 x 0.83 m across and 0.97 m tall. The link is turned +90 deg about x like
-    # in Grey_Rock's model.sdf (the mesh is y-up).
-    "rock": dict(label="Rock", mesh="model://Grey_Rock/Mesh/Grey_Rock.obj", scale=(0.15, 0.4, 0.15),
+    # room to go around it: about 1.2 x 1.4 m across (wide enough to sit on the trail even on a bend) and 0.97 m
+    # tall. The link is turned +90 deg about x like in Grey_Rock's model.sdf (the mesh is y-up).
+    "rock": dict(label="Rock", mesh="model://Grey_Rock/Mesh/Grey_Rock.obj", scale=(0.18, 0.4, 0.18),
                  link_pose="0 0 0 1.5708 0 0"),
     # The trail world's Tree laid along the model's y axis instead of stood up, tipped 15 deg so the trunk's
     # base rests on the ground and the crown is partly sunk into it: about 2.1 m long, 1.2 m across the crown

@@ -57,7 +57,9 @@ class YOLOObstacleDetector(Node):
         front_obstacle = None
         best_score = -1
         image_width = frame.shape[1]
-        centre_x = image_width / 2
+        # Middle third of the image: a narrow rock a little off-centre (e.g. on a bend) still counts as in front
+        centre_left = image_width / 3
+        centre_right = 2 * image_width / 3
 
         for box in results[0].boxes:
 
@@ -67,9 +69,9 @@ class YOLOObstacleDetector(Node):
 
             detections.append(f'{class_name}: {confidence:.2f}')
 
-            # Check whether the obstacle overlaps the centre of the camera image
+            # Check whether the obstacle overlaps the middle third of the camera image
             x1, y1, x2, y2 = box.xyxy[0].tolist()
-            if x1 <= centre_x <= x2:
+            if x1 <= centre_right and x2 >= centre_left:
                 box_area = (x2 - x1) * (y2 - y1)
 
                 if box_area > best_score:
