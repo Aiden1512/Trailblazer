@@ -95,7 +95,7 @@
     <include>
       <uri>model://Birch</uri>
       <name>Junction3.2</name>
-      <pose>-5 -0.2 0 0 0 0</pose>
+      <pose>-5.2 -0.2 0 0 0 0</pose>
     </include>
 
         <include>
