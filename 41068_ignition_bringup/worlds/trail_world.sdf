@@ -120,7 +120,7 @@
         <include>
       <uri>model://Birch</uri>
       <name>Junction4.3</name>
-      <pose>1.1 -1.8 0 0 0 0</pose>
+      <pose>1 -1.7 0 0 0 0</pose>
     </include>
 
   </world>
