@@ -6,6 +6,7 @@ from launch.actions import (
     OpaqueFunction,
     SetEnvironmentVariable,
     TimerAction,
+    ExecuteProcess,
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -464,6 +465,46 @@ def generate_launch_description():
                      'release_distance': 0.7,
                      'slow_distance': 1.2}],
         condition=_if_true('husky'),
+    ))
+
+    # Trailblazer GUI
+    ld.add_action(Node(
+        package='trailblazer_gui',
+        executable='main.py',
+        output='screen',
+    ))
+
+    # Path recorder
+    ld.add_action(Node(
+        package='husky_mapping',
+        executable='path_recorder',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+    ))
+
+    # YOLO obstacle detection
+    ld.add_action(ExecuteProcess(
+        cmd=[
+            '/usr/bin/python3',
+            '/home/sourr/41068_ws/src/Trailblazer/image_detection/yolo_ros_node.py'
+        ],
+        output='screen',
+    ))
+
+    # Mission manager
+    ld.add_action(Node(
+        package='trail_decision_making',
+        executable='mission_manager_node',
+        namespace='husky1',
+        output='screen',
+        parameters=[
+            '/home/sourr/41068_ws/src/Trailblazer/trail_decision_making/config/mission_manager.yaml',
+            {'use_sim_time': use_sim_time},
+        ],
+        remappings=[
+            ('/tf', '/husky1/tf'),
+            ('/tf_static', '/husky1/tf_static'),
+        ],
     ))
 
     return ld
