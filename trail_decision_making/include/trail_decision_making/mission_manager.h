@@ -83,7 +83,9 @@ namespace trail_decision_making
         bool forcingBlockedEdge() const;
         void handleNavigationFailure();
         void replanFromNearestJunction();
-        void startBacktrackToJunction(const std::string &reason);
+        void startBacktrackToJunction(const std::string &reason, const std::string &status_prefix = "");
+        void startGoAroundTimer();
+        void onGoAroundTimeout();
         void driveBackToJunction();
         bool markCurrentEdgeBlocked();
         double flagInaccessibleSection();
@@ -120,6 +122,7 @@ namespace trail_decision_making
         rclcpp::TimerBase::SharedPtr start_timer_;
         rclcpp::TimerBase::SharedPtr retry_timer_;
         rclcpp::TimerBase::SharedPtr obstacle_wait_timer_;
+        rclcpp::TimerBase::SharedPtr go_around_timer_; // gives up going around after go_around_timeout_sec_
 
         // Current mission state
         int current_node_id_ = -1;
@@ -169,6 +172,8 @@ namespace trail_decision_making
         bool line_goal_sent_ = false;   // a FollowPath goal for the current waypoints is (or was) in progress
         bool going_around_ = false;     // Nav2's planner is taking us round an obstacle to the current waypoint
         double go_around_ahead_ = 2.5;  // going round, aim for the first waypoint at least this far (m) along the trail
+        double go_around_timeout_sec_ = 10.0; // not past the obstacle by then: backtrack instead (0 = never)
+        size_t go_around_start_index_ = 0;    // current_waypoint_index_ before skipWaypointsPastObstacle() moved it on
         bool auto_start_ = false; // start as soon as TF is up instead of waiting for /husky1/start_mission
         // a deque is used here because we will be popping from the front as we traverse edges
         std::deque<int> route_; // sequence of edge ids to traverse, in order, to reach the next uninspected edge

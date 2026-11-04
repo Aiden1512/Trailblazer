@@ -47,9 +47,11 @@ public:
         
         this->declare_parameter<double>("detection_radius", 2.0);
         this->declare_parameter<std::string>("save_file", "junction_nodes.yaml");
+        this->declare_parameter<double>("waypoint_spacing", 0.7);
 
         detection_radius_ = this->get_parameter("detection_radius").as_double();
         save_file_ = this->get_parameter("save_file").as_string();
+        waypoint_spacing_ = this->get_parameter("waypoint_spacing").as_double();
 
         pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("/husky1/pose", 10, std::bind(&JunctionRecorder::poseCallback, this, std::placeholders::_1));
         map_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>("/husky1/map", 10, std::bind(&JunctionRecorder::mapCallback, this, std::placeholders::_1));
@@ -90,6 +92,16 @@ public:
             response->message = "Recording started";
             RCLCPP_INFO(this->get_logger(), "Recording started");
         });
+        // Stops adding junctions and waypoints (e.g. once Phase 1 is finished); the graph so far is kept and saved
+        stop_service_ = this->create_service<std_srvs::srv::Trigger>("/husky1/stop_trail_recording",
+        [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>, std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+        {
+            recording_enabled_ = false;
+            saveNodes();
+            response->success = true;
+            response->message = "Recording stopped";
+            RCLCPP_INFO(this->get_logger(), "Recording stopped");
+        });
     }
 
     ~JunctionRecorder()
@@ -106,6 +118,7 @@ private:
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr graph_pub_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_service_;
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_service_;
     nav_msgs::msg::OccupancyGrid::SharedPtr latest_map_;
     std::vector<JunctionNode> nodes_;
 
@@ -124,7 +137,7 @@ private:
     int next_junction_id_ = 1; //next unused junction id
     int current_trail_index_ = -1;
     int active_junction_id_ = -1;
-    double waypoint_spacing_ = 1.0; //distance we want to know when to place next waypoint
+    double waypoint_spacing_ = 0.7; //distance we want to know when to place next waypoint (0.5 m so Phase 2 follows curves, not straight cuts across them)
     double junction_exit_distance_ = 1.8; //distance from a junction before it can trigger again
     double last_waypoint_x_ = 0.0; //last recorded waypoint position
     double last_waypoint_y_ = 0.0; //last recorded waypoint position
@@ -471,10 +484,9 @@ bool isDirectionOpen(double robot_x, double robot_y, double angle)
             return;
         }
         
-        if (active_junction_id_ != -1) //junctions are separate from waypoints
-        {
-            return;
-        }
+        // Keep recording inside the junction zone too: the junction is saved on the approach (its rays see the
+        // openings ~2 m early), so the turn itself happens in the zone. Skipping it left a ~2 m straight line from
+        // the junction to the first waypoint that cut the corner in Phase 2 (and clipped trees).
 
         if (!has_last_waypoint_)
         {

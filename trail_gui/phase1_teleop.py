@@ -91,8 +91,9 @@ class Phase1Frame(ttk.Frame):
         tk.Button(controls, text="Reset Run", command=self._reset_run,
                   **button_opts).pack(side="left")
         
-        self.record_button = tk.Button(controls, text="Start Recording", command=self._start_recording, **button_opts)
+        self.record_button = tk.Button(controls, text="Start Recording", command=self._toggle_recording, **button_opts)
         self.record_button.pack(side="left", padx=8)
+        self._record_button_default_bg = self.record_button.cget("bg")
 
 
         tk.Button(controls, text="Finish Mapping -> Phase 2", command=self._finish_mapping,
@@ -150,7 +151,7 @@ class Phase1Frame(ttk.Frame):
         self._last_graph_version = -1                     # e.g. take leftover obstacles out of the simulation
         self.state.reset()
         self.recording = False
-        self.record_button.config(text="Start Recording", state="normal")
+        self._show_recording()
         self._started = False
         self._display_cache.clear()
         self._last_recorded = None
@@ -165,21 +166,42 @@ class Phase1Frame(ttk.Frame):
             self.after_cancel(self._tick_job)
         self._tick_job = self.after(TICK_MS, self._tick)
 
-    def _start_recording(self):
+    def _toggle_recording(self):
+        if self.recording:
+            self._stop_recording()
+            return
         if self.pose_feed is None or not self.pose_feed.start_recording():
             messagebox.showwarning("Recording unavailable", "Could not contact the junction recorder.")
             return
         self.recording = True
-        self.record_button.config(
-            text="Recording in Progress",
-            state="disabled"
-        )
+        self._show_recording()
+
+    def _stop_recording(self):
+        """Stop the junction recorder adding to the trail (it keeps what it has). Pressing Start Recording
+        again carries on the same trail from wherever the robot is then."""
+        if not self.recording:
+            return
+        if self.pose_feed is None or not self.pose_feed.stop_recording():
+            messagebox.showwarning("Recording unavailable", "Could not contact the junction recorder to stop it.")
+            return
+        self.recording = False
+        self._last_recorded = None
+        self._show_recording()
+
+    def _show_recording(self):
+        if self.recording:
+            self.record_button.config(text="Stop Recording", bg="#c0392b", fg="white",
+                                      activebackground="#962d22", activeforeground="white")
+        else:
+            self.record_button.config(text="Start Recording", bg=self._record_button_default_bg, fg="black",
+                                      activebackground=self._record_button_default_bg, activeforeground="black")
 
     def _finish_mapping(self):
         if len(self.state.nodes) < 2:
             messagebox.showwarning("Not enough trail",
                                    "Drive the robot around in the simulation a bit before finishing mapping.")
             return
+        self._stop_recording()                   # otherwise the recorder carries on through Phase 2
         self.halt()
         try:
             state_module.save_map(self.state)    # so 'Continue where you left off' has something to load

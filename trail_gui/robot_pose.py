@@ -104,6 +104,7 @@ class RobotPoseFeed:
             self._cmd_vel_pub = self._node.create_publisher(Twist, "/husky1/cmd_vel_teleop", 10)
             self._reset_client = self._node.create_client(Trigger, "/husky1/reset_trail_graph")
             self._start_client = self._node.create_client(Trigger, "/husky1/start_trail_recording")
+            self._stop_client = self._node.create_client(Trigger, "/husky1/stop_trail_recording")
             self._executor = SingleThreadedExecutor()
             self._executor.add_node(self._node)
         except Exception as exc:
@@ -185,6 +186,13 @@ class RobotPoseFeed:
             return False
 
         self._start_client.call_async(Trigger.Request())
+        return True
+
+    def stop_recording(self):
+        if self._node is None or not self._stop_client.service_is_ready():
+            return False
+
+        self._stop_client.call_async(Trigger.Request())
         return True
 
     def send_velocity(self, linear=0.0, angular=0.0):

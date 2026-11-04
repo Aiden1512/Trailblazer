@@ -40,6 +40,7 @@ namespace trail_decision_making
         // Read each time an obstacle is handled, so it can be changed live with `ros2 param set`.
         declare_parameter<bool>("backtrack_on_obstacle", true);
         go_around_ahead_ = declare_parameter<double>("go_around_ahead", 2.5);
+        go_around_timeout_sec_ = declare_parameter<double>("go_around_timeout_sec", 10.0);
 
         // Initialize TF buffer and listener, and the navigation action client
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
@@ -224,7 +225,8 @@ namespace trail_decision_making
         set_parameter(rclcpp::Parameter("backtrack_on_obstacle", !request->data));
         response->success = true;
         response->message = request->data
-                                ? "Obstacle mode: Nav2 plans around obstacles (backtracks only if it can't get past)"
+                                ? "Obstacle mode: Nav2 plans around obstacles (backtracks if it can't get past within " +
+                                      std::to_string(static_cast<int>(std::round(go_around_timeout_sec_))) + " s)"
                                 : "Obstacle mode: mark the trail blocked and backtrack to the previous junction";
         RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
     }
@@ -360,6 +362,10 @@ namespace trail_decision_making
         {
             obstacle_wait_timer_->cancel();
         }
+        if (go_around_timer_)
+        {
+            go_around_timer_->cancel();
+        }
         obstacle_pause_active_ = false;
         cancelGoals();
     }
@@ -380,6 +386,10 @@ namespace trail_decision_making
     void MissionManager::resumeDriving()
     {
         clearPause();
+        if (going_around_)
+        {
+            startGoAroundTimer(); // the e-stop cancelled it; give the go-around its full time again
+        }
         sendNextWaypoint();
     }
 
@@ -769,6 +779,10 @@ namespace trail_decision_making
         goal_retry_count_ = 0;
         failed_recoveries_ = 0;
         transit_to_edge_start_ = false;
+        if (going_around_ && go_around_timer_)
+        {
+            go_around_timer_->cancel(); // got past the obstacle in time
+        }
         going_around_ = false; // reached the waypoint we were going round an obstacle to
         ++current_waypoint_index_;
         // If we have not reached the last waypoint, send the next waypoint to Nav2.
@@ -1186,6 +1200,11 @@ namespace trail_decision_making
                         line_goal_sent_ = false;
                     }
                     recordBlockedPoint(true); // still facing it: mark it on the GUI map before turning away
+                    if (!going_around_) // stopped again part way round: keep the first start and deadline
+                    {
+                        go_around_start_index_ = current_waypoint_index_;
+                        startGoAroundTimer();
+                    }
                     skipWaypointsPastObstacle();
                     going_around_ = true; // the planner, not the trail line, gets us past it
                     obstacle_avoidance_active_ = true;
@@ -1253,6 +1272,58 @@ namespace trail_decision_making
                graph_.getEdgeStatus(current_edge_id_) == EdgeStatus::BLOCKED;
     }
 
+    // Going around an obstacle has go_around_timeout_sec_ to get past it (reach the waypoint beyond it); restarted
+    // after an e-stop. 0 turns the limit off.
+    void MissionManager::startGoAroundTimer()
+    {
+        if (go_around_timer_)
+        {
+            go_around_timer_->cancel();
+        }
+        if (go_around_timeout_sec_ <= 0.0)
+        {
+            return;
+        }
+        go_around_timer_ = create_wall_timer(
+            std::chrono::duration<double>(go_around_timeout_sec_), [this]()
+            {
+                go_around_timer_->cancel();
+                onGoAroundTimeout(); });
+    }
+
+    // Still not past the obstacle: give up going around, mark the trail blocked and backtrack to the junction
+    // (as backtrack mode would have), reporting that the go-around was tried. Not on the only way home
+    // (forcingBlockedEdge), where backtracking would loop, nor off the trail network, with no junction to go back to.
+    void MissionManager::onGoAroundTimeout()
+    {
+        if (!mission_active_ || !going_around_ || paused_)
+        {
+            return;
+        }
+        if (!onTrailEdge() || forcingBlockedEdge())
+        {
+            RCLCPP_WARN(get_logger(), "Go-around not done after %.0f s, but there is nothing to backtrack to; "
+                                      "still trying", go_around_timeout_sec_);
+            return;
+        }
+        RCLCPP_WARN(get_logger(), "Could not get around the obstacle on edge %d within %.0f s; backtracking",
+                    current_edge_id_, go_around_timeout_sec_);
+        if (retry_timer_)
+        {
+            retry_timer_->cancel();
+        }
+        if (obstacle_wait_timer_)
+        {
+            obstacle_wait_timer_->cancel(); // stopped for the obstacle again part way round: don't wait any longer
+        }
+        obstacle_pause_active_ = false;
+        cancelGoals();
+        startBacktrackToJunction("Go-around timed out on",
+                                 "Tried to go around the obstacle but couldn't within " +
+                                     std::to_string(static_cast<int>(std::round(go_around_timeout_sec_))) +
+                                     " s, backtracking: ");
+    }
+
     // Nav2 gave up on a waypoint (after retries). Rather than ending the mission, treat the edge as
     // impassable and carry on inspecting whatever is still reachable, the long way round if need be.
     void MissionManager::handleNavigationFailure()
@@ -1316,8 +1387,19 @@ namespace trail_decision_making
     // The edge can't be driven (obstacle still there after the wait, or Nav2 gave up): mark it blocked, then
     // retrace the waypoints already driven back to the junction this traversal started from (current_node_id_).
     // When that is done onEdgeFinished() replans the rest of the inspection, which never uses blocked edges.
-    void MissionManager::startBacktrackToJunction(const std::string &reason)
+    void MissionManager::startBacktrackToJunction(const std::string &reason, const std::string &status_prefix)
     {
+        if (going_around_)
+        {
+            // skipWaypointsPastObstacle() moved the index past the obstacle; we never got there, so retrace
+            // only the waypoints reached before it
+            current_waypoint_index_ = go_around_start_index_;
+            line_goal_sent_ = false;
+            if (go_around_timer_)
+            {
+                go_around_timer_->cancel();
+            }
+        }
         if (line_goal_sent_)
         {
             updateWaypointIndexFromPose(); // which waypoints were reached before the obstacle
@@ -1332,7 +1414,7 @@ namespace trail_decision_making
         RCLCPP_WARN(get_logger(), "%s edge %d; marked blocked, returning to %s%s",
                     reason.c_str(), current_edge_id_, junctionName(current_node_id_).c_str(),
                     far_side_next ? " (will check it from the other end later)" : "");
-        publishStatus(trailName(current_edge_id_) + " blocked by an obstacle" +
+        publishStatus(status_prefix + trailName(current_edge_id_) + " blocked by an obstacle" +
                       (far_side_next ? "; will check it from the other end" : "") +
                       (cut_off > 0.0 ? "; blocked at both ends, so the " +
                                            std::to_string(static_cast<int>(std::round(cut_off))) +
