@@ -11,7 +11,7 @@ junctions:
     yaw: -2.65993
   - id: 3
     x: -4.26483
-    y: -0.779709
+    y: -0.579709
     yaw: -1.45701
   - id: 4
     x: 0.13987
@@ -114,7 +114,7 @@ trails:
     start_junction: 3
     end_junction: 4
     waypoints:
-      - x: -2.45798
+      - x: -2.85798
         y: -0.0796031
         yaw: -0.039982
       - x: -1.25388

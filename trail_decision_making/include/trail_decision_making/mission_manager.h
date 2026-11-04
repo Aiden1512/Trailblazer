@@ -157,7 +157,7 @@ namespace trail_decision_making
         unsigned goal_seq_ = 0;
         bool home_requested_ = false;        // the GUI's Return Home skipped the trails still to inspect
         double home_x_ = 6.5;
-        double home_y_ = 4.0;
+        double home_y_ = 3.0;
         int home_node_id_ = -1; // junction nearest the home position
         bool transit_to_edge_start_ = false;
         std::vector<Waypoint> current_waypoints_;

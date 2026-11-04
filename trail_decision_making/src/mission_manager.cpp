@@ -36,7 +36,7 @@ namespace trail_decision_making
         obstacle_wait_sec_ = declare_parameter<double>("obstacle_wait_sec", 4.0);
         auto_start_ = declare_parameter<bool>("auto_start", false);
         home_x_ = declare_parameter<double>("home_x", 6.5);
-        home_y_ = declare_parameter<double>("home_y", 4.0);
+        home_y_ = declare_parameter<double>("home_y", 3.0);
         // true = mark the trail blocked and go back to the previous junction; false = let Nav2 plan around.
         // Read each time an obstacle is handled, so it can be changed live with `ros2 param set`.
         declare_parameter<bool>("backtrack_on_obstacle", true);

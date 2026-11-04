@@ -237,6 +237,7 @@ namespace trail_decision_making
         double best_d = std::hypot(x - w[0].x, y - w[0].y), best_s = 0.0, s = 0.0;
         for (size_t i = 1; i < w.size(); ++i)
         {
+            // Find the closest point on the segment from w[i-1] to w[i] to (x, y)
             const double dx = w[i].x - w[i - 1].x, dy = w[i].y - w[i - 1].y;
             const double len = std::hypot(dx, dy);
             const double t = len > 1e-9 ? std::clamp(((x - w[i - 1].x) * dx + (y - w[i - 1].y) * dy) / (len * len), 0.0, 1.0) : 0.0;
@@ -250,7 +251,7 @@ namespace trail_decision_making
         }
         return best_s;
     }
-
+    // Get the waypoints along an edge between two distances from the from_node, interpolating the ends if necessary.
     std::vector<Waypoint> TrailGraph::edgeSection(int edge_id, double start, double end) const
     {
         std::vector<Waypoint> section;
@@ -298,7 +299,7 @@ namespace trail_decision_making
             }
         }
     }
-
+    // Count the number of edges that have an inaccessible section (blocked at both ends)
     size_t TrailGraph::countInaccessibleSections() const
     {
         return static_cast<size_t>(std::count_if(edges_.begin(), edges_.end(),
@@ -312,7 +313,7 @@ namespace trail_decision_making
                                                  [status](const TrailEdge &e) { return e.status == status; }));
     }
     
-    // Reset all edges to UNINSPECTED status. This is useful for testing or restarting a mission.
+    // Reset all edges to UNINSPECTED status. This is used for testing or restarting a mission.
     void TrailGraph::resetAllEdgesToUninspected()
     {
         for (auto &e : edges_)

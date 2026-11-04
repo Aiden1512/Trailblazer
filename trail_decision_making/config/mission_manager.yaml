@@ -13,6 +13,6 @@
     go_around_timeout_sec: 10.0   # going around and not past the obstacle by then: mark the trail blocked and backtrack (0 = keep trying)
     inaccessible_min_gap: 2.0     # a trail blocked from both ends: obstacles closer than this (m) along it are taken to be the same one
     home_x: 6.5   # where the robot parks once every reachable trail is inspected
-    home_y: 4.0
+    home_y: 3.0
     follow_trail_line: true   # true = drive trails along the recorded waypoint line (RPP only, no planner U-turns); false = Nav2 plans between waypoints
     waypoint_spacing: 0.4     # waypoints closer than this (m) to the previous one are dropped as duplicates

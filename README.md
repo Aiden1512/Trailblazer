@@ -37,7 +37,7 @@ export MESA_GL_VERSION_OVERRIDE=3.3
 Launch the **trail world** with SLAM, Nav2, and RViz:
 
 ```bash
-ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py slam:=true nav2:=true rviz:=true world:=trail_world spawn_x:=6.5 spawn_y:=4 spawn_yaw:=3.14159
+ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py slam:=true nav2:=true rviz:=true world:=trail_world spawn_x:=6.5 spawn_y:=3 spawn_yaw:=3.14159
 ```
 
 ### 2. Launch the Trailblazer GUI
@@ -122,13 +122,13 @@ If continuing directly from Phase 1, **do not launch a second simulation**.
 For a fresh simulation in the trail world:
 
 ```bash
-ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py slam:=true nav2:=true rviz:=true world:=trail_world spawn_x:=6.5 spawn_y:=4 spawn_yaw:=3.14159
+ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py slam:=true nav2:=true rviz:=true world:=trail_world spawn_x:=6.5 spawn_y:=3 spawn_yaw:=3.14159
 ```
 
 Alternatively, for the obstacle world:
 
 ```bash
-ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py slam:=true nav2:=true rviz:=true world:=obstacle_world spawn_x:=6.5 spawn_y:=4 spawn_yaw:=3.14159
+ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py slam:=true nav2:=true rviz:=true world:=obstacle_world spawn_x:=6.5 spawn_y:=3 spawn_yaw:=3.14159
 ```
 
 ### 2. Launch or keep running the GUI
