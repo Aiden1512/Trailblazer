@@ -232,6 +232,11 @@ global_costmap:
       use_sim_time: true
       footprint: '[ [0.5, 0.35], [0.5, -0.35], [-0.5, -0.35], [-0.5, 0.35] ]'
       resolution: 0.1
+      # Fixed window centred on the robot, so it can't drive off the edge of a
+      # still-growing SLAM map (the static layer would otherwise size the costmap to it)
+      rolling_window: true
+      width: 30
+      height: 30
       track_unknown_space: true
       plugins:
       - static_layer

@@ -10,7 +10,7 @@
     auto_start: false   # true = start without waiting for the GUI's start button (/husky1/start_mission)
     backtrack_on_obstacle: true   # true = mark a blocked trail and go back to the previous junction; false = Nav2 plans around the obstacle (GUI toggle: /husky1/set_obstacle_mode)
     go_around_ahead: 2.5          # going around, Nav2 aims for the first trail waypoint at least this far (m) ahead, past the obstacle
-    go_around_timeout_sec: 10.0   # going around and not past the obstacle by then: mark the trail blocked and backtrack (0 = keep trying)
+    go_around_timeout_sec: 15.0   # going around and not past the obstacle by then: mark the trail blocked and backtrack (0 = keep trying)
     inaccessible_min_gap: 2.0     # a trail blocked from both ends: obstacles closer than this (m) along it are taken to be the same one
     home_x: 6.5   # where the robot parks once every reachable trail is inspected
     home_y: 3.0
