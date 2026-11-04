@@ -136,6 +136,11 @@ class Phase2Frame(ttk.Frame):
                                            fg="white", activeforeground="white", **button_opts)
         self.obstacle_mode_btn.pack(side="right")
         self._show_obstacle_mode()
+        # Which trails the next Start inspects; the label follows the graph mission_manager publishes
+        self.trail_source_btn = tk.Button(mission_controls, command=self._toggle_trail_source,
+                                          fg="white", activeforeground="white", **button_opts)
+        self.trail_source_btn.pack(side="right", padx=6)
+        self._show_trail_source()
 
         right = ttk.Frame(main)
         right.pack(side="left", fill="y", padx=(14, 0))
@@ -219,6 +224,7 @@ class Phase2Frame(ttk.Frame):
 
     def _set_graph(self, graph):
         self._graph = graph
+        self._show_trail_source()
         if graph is not None:
             inspected, blocked, todo = mission_graph.summary(graph)
             junctions = sum(1 for n in graph["junctions"] if n["junction"] >= 0)
@@ -324,6 +330,24 @@ class Phase2Frame(ttk.Frame):
         else:
             self.obstacle_mode_btn.config(text="Obstacles: Backtrack", bg="#546e7a",
                                           activebackground="#37474f")
+
+    def _toggle_trail_source(self):
+        if self.status_feed is None:
+            self._log("Can't change the trails: not connected to ROS.")
+            return
+        phase1 = not self._phase1_trails()
+        self._log("Asking mission_manager to use the " + ("trails Phase 1 recorded..." if phase1
+                                                          else "pre-recorded trails..."))
+        self.status_feed.request_trail_source(phase1)   # the new graph comes back on mission_graph
+
+    def _phase1_trails(self):
+        return bool(self._graph and self._graph.get("phase1"))
+
+    def _show_trail_source(self):
+        if self._phase1_trails():
+            self.trail_source_btn.config(text="Trails: Phase 1 Mapped", bg="#ef6c00", activebackground="#e65100")
+        else:
+            self.trail_source_btn.config(text="Trails: Pre-recorded", bg="#00796b", activebackground="#004d40")
 
     # ---------------- drawing / logging ----------------
     def _redraw(self):

@@ -2,6 +2,7 @@
   ros__parameters:
     use_sim_time: true
     waypoints_file: "/home/stella/Trailblazer/trail_decision_making/config/recorded_trail_paths.yaml"
+    phase1_waypoints_file: "/home/stella/Trailblazer/junction_nodes.yaml"   # what path_recorder saves (run from ~/Trailblazer); GUI's Trails button switches to it
     global_frame: "husky1_map"
     robot_frame: "husky1_base_link"
     nav_action_name: "navigate_to_pose"

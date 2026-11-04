@@ -14,11 +14,12 @@ What the real robot is doing: obstacle detection and mission progress, via ROS 2
     /husky1/resume_mission      std_srvs/Trigger carry on from where the e-stop left off
     /husky1/return_home         std_srvs/Trigger skip the trails still to inspect and go home
     /husky1/set_obstacle_mode   std_srvs/SetBool true = Nav2 plans around obstacles, false = backtrack to the junction
+    /husky1/use_phase1_trails   std_srvs/SetBool true = inspect the trails Phase 1 recorded, false = the pre-recorded ones
 
 MissionStatusFeed listens in a background thread and keeps the latest values;
 the GUI polls get() and status() so no Tk calls are made from the ROS thread.
-request_start(), request_pause(), request_resume(), request_return_home() and
-request_obstacle_mode() ask mission_manager to act; each answer is queued in
+request_start(), request_pause(), request_resume(), request_return_home(),
+request_obstacle_mode() and request_trail_source() ask mission_manager to act; each answer is queued in
 command_results as (ok, message) for the GUI to log.
 """
 import json
@@ -53,6 +54,7 @@ PAUSE_SERVICE = "/husky1/pause_mission"
 RESUME_SERVICE = "/husky1/resume_mission"
 HOME_SERVICE = "/husky1/return_home"
 OBSTACLE_MODE_SERVICE = "/husky1/set_obstacle_mode"
+TRAIL_SOURCE_SERVICE = "/husky1/use_phase1_trails"
 WATER_WARN_TOPIC = "/husky1/water_detected"
 WATER_STOP_TOPIC = "/husky1/water_stop"
 FRONT_OBSTACLE_TOPIC = "/husky1/front_obstacle"
@@ -114,7 +116,8 @@ class MissionStatusFeed:
             self._node.create_subscription(String, GRAPH_TOPIC, self._on_graph, latched)
             for service in (START_SERVICE, PAUSE_SERVICE, RESUME_SERVICE, HOME_SERVICE):
                 self._clients[service] = self._node.create_client(Trigger, service)
-            self._clients[OBSTACLE_MODE_SERVICE] = self._node.create_client(SetBool, OBSTACLE_MODE_SERVICE)
+            for service in (OBSTACLE_MODE_SERVICE, TRAIL_SOURCE_SERVICE):
+                self._clients[service] = self._node.create_client(SetBool, service)
             self._executor = SingleThreadedExecutor()
             self._executor.add_node(self._node)
         except Exception as exc:
@@ -261,6 +264,16 @@ class MissionStatusFeed:
         request = SetBool.Request()
         request.data = go_around
         self._request(OBSTACLE_MODE_SERVICE, "change the obstacle mode", request)
+
+    def request_trail_source(self, phase1):
+        """Tell mission_manager which trails to inspect: True = the ones Phase 1
+        recorded, False = the pre-recorded ones. Refused while a mission runs."""
+        if not ROS_AVAILABLE:
+            self._request(TRAIL_SOURCE_SERVICE, "change the trails")   # reports why
+            return
+        request = SetBool.Request()
+        request.data = phase1
+        self._request(TRAIL_SOURCE_SERVICE, "change the trails", request)
 
     # ---------------- GUI-facing API ----------------
     def get(self):

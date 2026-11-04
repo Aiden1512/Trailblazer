@@ -52,6 +52,7 @@ namespace trail_decision_making
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr resume_srv_;  // the GUI's "Resume" button
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr home_srv_;    // the GUI's "Return Home" button
         rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr obstacle_mode_srv_; // the GUI's obstacle mode toggle
+        rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr trail_source_srv_;  // the GUI's recorded / Phase 1 trails toggle
         GoalHandleNavigateToPose::SharedPtr current_goal_handle_;
 
         // Mission control methods
@@ -104,6 +105,9 @@ namespace trail_decision_making
             const std::shared_ptr<std_srvs::srv::Trigger::Request>,
             std::shared_ptr<std_srvs::srv::Trigger::Response> response);
         void onObstacleModeRequest(
+            const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+            std::shared_ptr<std_srvs::srv::SetBool::Response> response);
+        void onTrailSourceRequest(
             const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
             std::shared_ptr<std_srvs::srv::SetBool::Response> response);
         void haltRobot();
@@ -172,7 +176,10 @@ namespace trail_decision_making
         std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
         std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
-        std::string waypoints_file_;
+        std::string waypoints_file_;          // the trail file in use (one of the two below)
+        std::string recorded_waypoints_file_; // the pre-recorded trails (waypoints_file parameter)
+        std::string phase1_waypoints_file_;   // the trails Phase 1 records (phase1_waypoints_file parameter)
+        bool use_phase1_trails_ = false;
         std::string global_frame_{"map"};
         std::string robot_frame_{"base_link"};
         std::string nav_action_name_{"navigate_to_pose"};

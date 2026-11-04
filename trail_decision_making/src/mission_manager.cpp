@@ -22,6 +22,8 @@ namespace trail_decision_making
     {
         // Declare parameters and get their values
         waypoints_file_ = declare_parameter<std::string>("waypoints_file", "");
+        recorded_waypoints_file_ = waypoints_file_;
+        phase1_waypoints_file_ = declare_parameter<std::string>("phase1_waypoints_file", "");
         global_frame_ = declare_parameter<std::string>("global_frame", "map");
         robot_frame_ = declare_parameter<std::string>("robot_frame", "base_link");
         nav_action_name_ = declare_parameter<std::string>(
@@ -89,6 +91,10 @@ namespace trail_decision_making
         obstacle_mode_srv_ = create_service<std_srvs::srv::SetBool>(
             "/husky1/set_obstacle_mode",
             std::bind(&MissionManager::onObstacleModeRequest, this, _1, _2));
+        // The GUI's trail source toggle: true = the trails Phase 1 recorded, false = the pre-recorded ones
+        trail_source_srv_ = create_service<std_srvs::srv::SetBool>(
+            "/husky1/use_phase1_trails",
+            std::bind(&MissionManager::onTrailSourceRequest, this, _1, _2));
 
         loadGraph(); // so the GUI can show the trail network before the mission starts
         publishGraph();
@@ -220,6 +226,46 @@ namespace trail_decision_making
         response->message = request->data
                                 ? "Obstacle mode: Nav2 plans around obstacles (backtracks only if it can't get past)"
                                 : "Obstacle mode: mark the trail blocked and backtrack to the previous junction";
+        RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
+    }
+
+    // The GUI's trail source toggle: swap between the pre-recorded trail file and the one Phase 1 records, so both
+    // can be inspected in one run without restarting. Reloads the graph straight away so the GUI shows it.
+    void MissionManager::onTrailSourceRequest(
+        const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+        std::shared_ptr<std_srvs::srv::SetBool::Response> response)
+    {
+        if (mission_active_ || (start_timer_ && !start_timer_->is_canceled()))
+        {
+            response->success = false;
+            response->message = "Can't change the trails while a mission is running";
+            return;
+        }
+        const std::string &file = request->data ? phase1_waypoints_file_ : recorded_waypoints_file_;
+        if (file.empty())
+        {
+            response->success = false;
+            response->message = std::string("No ") + (request->data ? "phase1_waypoints_file" : "waypoints_file") +
+                                " set in mission_manager.yaml";
+            return;
+        }
+        waypoints_file_ = file;
+        use_phase1_trails_ = request->data;
+        loadGraph();
+        blocked_points_.clear(); // they belong to the old trails
+        publishBlockedPoints();
+        publishProgress(); // also republishes the graph
+        const char *source = use_phase1_trails_ ? "Phase 1" : "recorded";
+        if (graph_.edges().empty())
+        {
+            response->success = false;
+            response->message = std::string("Switched to the ") + source + " trails, but none could be loaded from '" +
+                                file + "'";
+            return;
+        }
+        response->success = true;
+        response->message = std::string("Using the ") + source + " trails from '" + file + "' (" +
+                            std::to_string(graph_.edges().size()) + " trail edges)";
         RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
     }
 
@@ -1483,7 +1529,7 @@ namespace trail_decision_making
     }
 
     // JSON for the GUI (map frame, metres):
-    // {"file": ..., "junctions": [{"node": 0, "junction": 1, "x": .., "y": ..}, ...],
+    // {"file": ..., "phase1": false, "junctions": [{"node": 0, "junction": 1, "x": .., "y": ..}, ...],
     //  "trails": [{"edge": 0, "trail": 1, "from": 0, "to": 1, "status": "inspected", "far_side": -1,
     //              "waypoints": [[x, y], ...], "inaccessible": [[x, y], ...]}, ...]}
     // "junction" is -1 for a trail's dead end; status is unvisited / inspected / blocked. "inaccessible" is the
@@ -1491,7 +1537,8 @@ namespace trail_decision_making
     void MissionManager::publishGraph()
     {
         std::ostringstream json;
-        json << std::fixed << std::setprecision(3) << "{\"file\": \"" << waypoints_file_ << "\", \"junctions\": [";
+        json << std::fixed << std::setprecision(3) << "{\"file\": \"" << waypoints_file_ << "\", \"phase1\": "
+             << (use_phase1_trails_ ? "true" : "false") << ", \"junctions\": [";
         const auto &nodes = graph_.nodes();
         for (size_t i = 0; i < nodes.size(); ++i)
         {
