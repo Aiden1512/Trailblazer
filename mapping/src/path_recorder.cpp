@@ -45,7 +45,7 @@ public:
     {
     
         
-        this->declare_parameter<double>("detection_radius", 2.0);
+        this->declare_parameter<double>("detection_radius", 1.5);
         this->declare_parameter<std::string>("save_file", "junction_nodes.yaml");
         this->declare_parameter<double>("waypoint_spacing", 0.7);
 
