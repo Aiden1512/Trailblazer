@@ -485,8 +485,8 @@ def generate_launch_description():
     # YOLO obstacle detection
     ld.add_action(ExecuteProcess(
         cmd=[
-            '/usr/bin/python3',
-            '/home/sourr/41068_ws/src/Trailblazer/image_detection/yolo_ros_node.py'
+            '/home/aiden/Trailblazer/.venv/bin/python',
+            '/home/aiden/Trailblazer/image_detection/yolo_ros_node.py'
         ],
         output='screen',
     ))
@@ -498,7 +498,7 @@ def generate_launch_description():
         namespace='husky1',
         output='screen',
         parameters=[
-            '/home/sourr/41068_ws/src/Trailblazer/trail_decision_making/config/mission_manager.yaml',
+            '/home/aiden/Trailblazer/trail_decision_making/config/mission_manager.yaml',
             {'use_sim_time': use_sim_time},
         ],
         remappings=[
