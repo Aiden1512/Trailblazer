@@ -52,6 +52,7 @@ namespace trail_decision_making
         follow_goal_handle_.reset();
         line_goal_sent_ = false;
         going_around_ = false;
+        obstacle_avoidance_active_ = false;
         inspecting_edge_ = false;
         backtracking_ = false;
         returning_home_ = false;

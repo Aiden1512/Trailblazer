@@ -292,7 +292,11 @@ namespace trail_decision_making
                                      : "") +
                       " - " + progressText());
 
-        obstacle_avoidance_active_ = true; // the obstacle stays in the stop range while we turn away from it
+        // If the obstacle is in the stop range now (stopped facing it), ignore the stop while we turn away; it
+        // clears once we have. Only then: the stop is edge-triggered, so after a go-around timeout (usually off
+        // to the side, stop not active) a flag set here would never be cleared, and the stop would be ignored
+        // for good, e.g. when coming at the same obstacle from the trail's other end.
+        obstacle_avoidance_active_ = obstacle_stop_active_;
         driveBackToJunction();
     }
 
