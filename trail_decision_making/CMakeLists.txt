@@ -31,6 +31,10 @@ target_link_libraries(${PROJECT_NAME}_core PUBLIC yaml-cpp)
 # ROS node
 add_executable(mission_manager_node
   src/mission_manager.cpp
+  src/mission_services.cpp
+  src/trail_following.cpp
+  src/obstacle_handling.cpp
+  src/gui_publishing.cpp
   src/main.cpp)
 target_link_libraries(mission_manager_node ${PROJECT_NAME}_core)
 ament_target_dependencies(mission_manager_node
