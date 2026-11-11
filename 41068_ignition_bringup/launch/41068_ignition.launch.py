@@ -17,6 +17,12 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
+import os
+
+# Repo root, found from this file's real location (colcon --symlink-install links it from install/),
+# so the launch works on anyone's machine without editing paths.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+
 _TRUE_STRINGS = "['true', '1', 'yes', 'on']"
 
 
@@ -479,14 +485,16 @@ def generate_launch_description():
         package='husky_mapping',
         executable='path_recorder',
         output='screen',
-        parameters=[{'use_sim_time': use_sim_time}],
+        # Same file mission_manager's phase1_waypoints_file reads, whatever directory the launch is run from
+        parameters=[{'use_sim_time': use_sim_time,
+                     'save_file': os.path.join(_REPO_ROOT, 'junction_nodes.yaml')}],
     ))
 
     # YOLO obstacle detection
     ld.add_action(ExecuteProcess(
         cmd=[
             '/usr/bin/python3',
-            '/home/sourr/41068_ws/src/Trailblazer/image_detection/yolo_ros_node.py'
+            os.path.join(_REPO_ROOT, 'image_detection', 'yolo_ros_node.py'),
         ],
         output='screen',
     ))
@@ -498,8 +506,12 @@ def generate_launch_description():
         namespace='husky1',
         output='screen',
         parameters=[
-            '/home/sourr/41068_ws/src/Trailblazer/trail_decision_making/config/mission_manager.yaml',
-            {'use_sim_time': use_sim_time},
+            os.path.join(_REPO_ROOT, 'trail_decision_making', 'config', 'mission_manager.yaml'),
+            # The YAML gives these relative to the repo root; pass them absolute so the node finds them
+            # whatever directory the launch is run from.
+            {'use_sim_time': use_sim_time,
+             'waypoints_file': os.path.join(_REPO_ROOT, 'trail_decision_making', 'config', 'recorded_trail_paths.yaml'),
+             'phase1_waypoints_file': os.path.join(_REPO_ROOT, 'junction_nodes.yaml')},
         ],
         remappings=[
             ('/tf', '/husky1/tf'),

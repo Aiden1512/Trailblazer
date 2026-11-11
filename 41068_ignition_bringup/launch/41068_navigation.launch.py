@@ -1,5 +1,10 @@
+import os
+import tempfile
+
+import yaml
+
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, OpaqueFunction, SetLaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression, TextSubstitution
 from launch.conditions import IfCondition
@@ -30,6 +35,29 @@ def _if_slam_needed():
     return IfCondition(PythonExpression(
         _is_true_expression('slam') + [' or '] + _is_true_expression('nav2')
     ))
+
+
+def _resolve_slam_map_file(context):
+    """slam_toolbox reads map_file_name as given, so a relative path would depend on the launch's working
+    directory. Resolve a relative one against the 41068_ignition_bringup package and hand slam_toolbox a
+    copy of the params file with the absolute path."""
+    params_path = LaunchConfiguration('slam_params_file_in').perform(context)
+    with open(params_path) as f:
+        params = yaml.safe_load(f) or {}
+    package_dir = FindPackageShare('41068_ignition_bringup').perform(context)
+    changed = False
+    for node in params.values():
+        ros_params = node.get('ros__parameters', {}) if isinstance(node, dict) else {}
+        map_file = ros_params.get('map_file_name')
+        if isinstance(map_file, str) and map_file and not os.path.isabs(map_file):
+            ros_params['map_file_name'] = os.path.join(package_dir, map_file)
+            changed = True
+    if not changed:
+        return [SetLaunchConfiguration('slam_params_file_resolved', params_path)]
+    out = tempfile.NamedTemporaryFile('w', prefix='slam_params_', suffix='.yaml', delete=False)
+    with out:
+        yaml.safe_dump(params, out)
+    return [SetLaunchConfiguration('slam_params_file_resolved', out.name)]
 
 
 def generate_launch_description():
@@ -74,10 +102,11 @@ def generate_launch_description():
         description='Flag to launch Nav2. Nav2 also starts SLAM.'
     )
 
-    slam_params_file = PathJoinSubstitution([
+    slam_params_file_in = PathJoinSubstitution([
         config_path,
         _params_filename('slam_params', config_filename_suffix)
     ])
+    slam_params_file = LaunchConfiguration('slam_params_file_resolved')
 
     nav2_params_file = PathJoinSubstitution([
         config_path,
@@ -156,6 +185,8 @@ def generate_launch_description():
     ld.add_action(config_filename_suffix_launch_arg)
     ld.add_action(slam_launch_arg)
     ld.add_action(nav2_launch_arg)
+    ld.add_action(SetLaunchConfiguration('slam_params_file_in', slam_params_file_in))
+    ld.add_action(OpaqueFunction(function=_resolve_slam_map_file))
     ld.add_action(slam)
     ld.add_action(navigation)
 

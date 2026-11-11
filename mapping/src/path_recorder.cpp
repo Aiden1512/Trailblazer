@@ -106,7 +106,10 @@ public:
 
     ~JunctionRecorder()
     {
-        saveNodes();
+        // Don't overwrite a previously recorded graph with an empty one when nothing was recorded this run
+        // (path_recorder now starts with every launch). A deliberate reset already saved the empty graph.
+        if (!nodes_.empty() || !trails_.empty())
+            saveNodes();
     }
 
 

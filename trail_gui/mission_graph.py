@@ -19,8 +19,9 @@ import os
 
 import yaml
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-MISSION_PARAMS = os.path.join(_HERE, "..", "trail_decision_making", "config", "mission_manager.yaml")
+_HERE = os.path.dirname(os.path.realpath(__file__))   # realpath: the launch file starts us via a symlink in install/
+_REPO_ROOT = os.path.dirname(_HERE)
+MISSION_PARAMS = os.path.join(_REPO_ROOT, "trail_decision_making", "config", "mission_manager.yaml")
 NODE_MERGE_TOLERANCE = 0.5   # metres, kNodeMergeTolerance in trail_graph.cpp
 
 
@@ -35,7 +36,8 @@ def find_trail_file():
         for node in params.values():
             path = node.get("ros__parameters", {}).get("waypoints_file")
             if path:
-                return path
+                # Relative paths in mission_manager.yaml are relative to the repo root (as in the launch file)
+                return os.path.join(_REPO_ROOT, path)
     except (OSError, yaml.YAMLError, AttributeError):
         pass
     return None
