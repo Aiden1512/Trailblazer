@@ -48,6 +48,7 @@ class YOLOObstacleDetector(Node):
             frame,
             imgsz=320,
             conf=0.25,
+            iou=0.5,
             device='cpu',
             verbose=False
         )
