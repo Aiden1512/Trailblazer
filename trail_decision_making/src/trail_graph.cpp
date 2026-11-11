@@ -1,42 +1,26 @@
 #include "trail_decision_making/trail_graph.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
-
-#include "yaml-cpp/yaml.h"
-#include <algorithm>
 #include <unordered_map>
 #include <utility>
 
+#include "yaml-cpp/yaml.h"
+
 namespace trail_decision_making
 {
+    namespace
+    {
+        // Trail ends closer than this (m) to an existing node are joined to it rather than getting their own
+        constexpr double kNodeMergeTolerance = 0.5;
+    } // namespace
 
-    // namespace
-    // {
-        constexpr double kNodeMergeTolerance = 0.5; // metres, tune to your mapping output
-        std::pair<double, double> TrailGraph::pointToSegment(
-            double px, double py, double ax, double ay, double bx, double by)
-        {
-            const double dx = bx - ax;
-            const double dy = by - ay;
-            const double len2 = dx * dx + dy * dy;
-            double frac = 0.0;
-            if (len2 > 1e-9)
-            {
-                frac = ((px - ax) * dx + (py - ay) * dy) / len2;
-                frac = std::max(0.0, std::min(frac, 1.0));
-            }
-            const double cx = ax + frac * dx;
-            const double cy = ay + frac * dy;
-            return {std::hypot(px - cx, py - cy), frac};
-        }
-    // } // namespace
-
-    // Load the YAML file produced by the mapping team. Returns false on failure.
+    // Load a trail file (path_recorder's junction_nodes.yaml format). Returns false on failure.
     bool TrailGraph::loadFromYaml(const std::string &file_path)
     {
         nodes_.clear();
-        edges_.clear(); 
+        edges_.clear();
 
         try
         {
@@ -117,9 +101,9 @@ namespace trail_decision_making
         }
         catch (const YAML::Exception &)
         {
-            return false; 
+            return false;
         }
-        return !edges_.empty(); // maybe return the edges instead of returning true/false, so the caller can check if the graph is empty
+        return !edges_.empty();
     }
 
     // Get a pointer to the edge with the given id, or nullptr if the id does not exist.
@@ -127,7 +111,7 @@ namespace trail_decision_making
     {
         for (const auto &e : edges_)
         {
-            if (e.id == edge_id) // return a pointer to the edge if the id matches
+            if (e.id == edge_id)
             {
                 return &e;
             }
@@ -140,9 +124,9 @@ namespace trail_decision_making
         std::vector<int> result;
         for (const auto &e : edges_)
         {
-            if (e.from_node == node_id || e.to_node == node_id) // if the edge connects to the node, add it to the result
+            if (e.from_node == node_id || e.to_node == node_id)
             {
-                result.push_back(e.id); // push the edge id into the result vector
+                result.push_back(e.id);
             }
         }
         return result;
@@ -152,9 +136,9 @@ namespace trail_decision_making
     {
         for (auto &e : edges_)
         {
-            if (e.id == edge_id) // if the edge id matches, set the status and return
+            if (e.id == edge_id)
             {
-                e.status = status; // set the status of the edge to the new status
+                e.status = status;
                 return;
             }
         }
@@ -176,7 +160,7 @@ namespace trail_decision_making
             const double dx = n.position.x - x;
             const double dy = n.position.y - y;
             const double d2 = dx * dx + dy * dy;
-            if (d2 < best_d2) // if this node is closer than the best so far, update the best
+            if (d2 < best_d2)
             {
                 best_d2 = d2;
                 best = n.id;
@@ -185,7 +169,7 @@ namespace trail_decision_making
         return best;
     }
 
-    // Return the percentage of inspected edges (inspected + blocked) / total, 0.0 if graph is empty
+    // Fraction of the trail network checked so far (shown as the GUI's progress), 0.0 if the graph is empty
     double TrailGraph::explorationPercentage() const
     {
         if (edges_.empty())
@@ -204,7 +188,6 @@ namespace trail_decision_making
                 done += e.far_side_node >= 0 ? 0.5 : 1.0; // only one side of the obstacle checked so far
             }
         }
-        // return the fraction of the trail network that has been checked (important for UI)
         return done / static_cast<double>(edges_.size());
     }
 
@@ -311,17 +294,6 @@ namespace trail_decision_making
     {
         return static_cast<size_t>(std::count_if(edges_.begin(), edges_.end(),
                                                  [status](const TrailEdge &e) { return e.status == status; }));
-    }
-    
-    // Reset all edges to UNINSPECTED status. This is used for testing or restarting a mission.
-    void TrailGraph::resetAllEdgesToUninspected()
-    {
-        for (auto &e : edges_)
-        {
-            e.status = EdgeStatus::UNINSPECTED;
-            e.far_side_node = -1;
-            e.inaccessible.clear();
-        }
     }
 
     // Reuse an existing node within a tolerance, otherwise create a new one

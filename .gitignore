@@ -1,9 +1,13 @@
+# colcon
 build/
 install/
 log/
+
+# Python
 __pycache__/
 *.py[cod]
-*:Zone.Identifier
-__pycache__/
-*.py[cod]
+
+# Editor / OS
+.vscode/
 .DS_Store
+*:Zone.Identifier

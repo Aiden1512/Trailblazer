@@ -1,8 +1,8 @@
-#ifndef TRAIL_DECISION_MAKING__TRAIL_GRAPH_HPP_
-#define TRAIL_DECISION_MAKING__TRAIL_GRAPH_HPP_
+#ifndef TRAIL_DECISION_MAKING__TRAIL_GRAPH_H_
+#define TRAIL_DECISION_MAKING__TRAIL_GRAPH_H_
 
+#include <cstddef>
 #include <string>
-#include <cmath>
 #include <vector>
 
 namespace trail_decision_making
@@ -35,11 +35,11 @@ namespace trail_decision_making
     {
         int id = -1; // index into TrailGraph::edges_
         int trail_id = -1; // "id" of the trail in the YAML file (what the GUI shows), -1 if it has none
-        int from_node = -1; 
+        int from_node = -1;
         int to_node = -1;
         std::string trail_name;
         std::vector<Waypoint> waypoints; // ordered from from_node to to_node
-        EdgeStatus status{EdgeStatus::UNINSPECTED}; 
+        EdgeStatus status{EdgeStatus::UNINSPECTED};
         // BLOCKED part way through inspecting it: the end it still has to be inspected from, up to the
         // obstacle (-1: nothing left to check, e.g. checked from both ends)
         int far_side_node = -1;
@@ -48,17 +48,10 @@ namespace trail_decision_making
         std::vector<Waypoint> inaccessible;
     };
 
-    struct ClosestEdgeResult
-    {
-        int edge_id = -1;
-        double distance = std::numeric_limits<double>::max();
-        double t = 0.0; // fraction along the *whole* edge, 0 at from_node, 1 at to_node
-    };
-
     class TrailGraph
     {
     public:
-        // Load the YAML file produced by the mapping team. Returns false on failure.
+        // Load a trail file (path_recorder's junction_nodes.yaml format). Returns false on failure.
         bool loadFromYaml(const std::string &file_path);
 
         const std::vector<TrailNode> &nodes() const { return nodes_; }
@@ -92,9 +85,6 @@ namespace trail_decision_making
 
         size_t countEdges(EdgeStatus status) const;
 
-        void resetAllEdgesToUninspected();
-        std::pair<double, double> pointToSegment(double px, double py, double ax, double ay, double bx, double by);
-
     private:
         std::vector<TrailNode> nodes_;
         std::vector<TrailEdge> edges_;
@@ -105,4 +95,4 @@ namespace trail_decision_making
 
 } // namespace trail_decision_making
 
-#endif // TRAIL_DECISION_MAKING__TRAIL_GRAPH_HPP_
+#endif // TRAIL_DECISION_MAKING__TRAIL_GRAPH_H_

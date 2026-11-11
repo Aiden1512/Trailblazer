@@ -18,7 +18,6 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 
-
 # ROS-independent core: graph + planner (easy to unit test)
 add_library(${PROJECT_NAME}_core STATIC
   src/trail_graph.cpp
@@ -42,11 +41,5 @@ ament_target_dependencies(mission_manager_node
 
 install(TARGETS mission_manager_node DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
-
-# if(BUILD_TESTING)
-#   find_package(ament_cmake_gtest REQUIRED)
-#   ament_add_gtest(test_route_planner test/test_route_planner.cpp)
-#   target_link_libraries(test_route_planner ${PROJECT_NAME}_core)
-# endif()
 
 ament_package()

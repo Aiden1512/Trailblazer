@@ -12,7 +12,7 @@ namespace trail_decision_making
     // Node reached after traversing edge_id starting from node_id
     int RoutePlanner::otherEnd(int edge_id, int node_id) const
     {
-        const TrailEdge *e = graph_.getEdge(edge_id); // trails are bidirectional, so return the other node of the edge
+        const TrailEdge *e = graph_.getEdge(edge_id);
         if (!e)
         {
             return -1;
@@ -25,22 +25,19 @@ namespace trail_decision_making
     std::vector<int> RoutePlanner::planToNextUninspected(int start_node) const
     {
         // Breadth-first search: fewest edges to reach a node with an uninspected edge.
-        // Swap for Dijkstra (weight = trail length) once BFS works.
         std::queue<int> frontier;
         std::unordered_map<int, std::pair<int, int>> parent; // node -> (prev node, edge used)
         frontier.push(start_node);
         parent[start_node] = {-1, -1};
 
-        // BFS loop
         while (!frontier.empty())
         {
-            const int node = frontier.front(); // get the next node to explore
-            frontier.pop(); // remove it from the frontier
+            const int node = frontier.front();
+            frontier.pop();
 
-            // Check all edges connected to this node
             for (int edge_id : graph_.getConnectedEdges(node))
             {
-                const TrailEdge *e = graph_.getEdge(edge_id); // get the edge from the graph
+                const TrailEdge *e = graph_.getEdge(edge_id);
                 if (!e)
                 {
                     continue;
@@ -52,9 +49,8 @@ namespace trail_decision_making
                 {
                     continue;
                 }
-                // If this edge is uninspected (or a far side to check), we have found our goal.
-                //Reconstruct the path and return it.
-                if (e->status == EdgeStatus::UNINSPECTED || far_side_check) 
+                // Found the goal: walk the parents back to start_node to build the route
+                if (e->status == EdgeStatus::UNINSPECTED || far_side_check)
                 {
                     std::vector<int> path{edge_id};
                     for (int cur = node; parent[cur].second != -1; cur = parent[cur].first)
@@ -64,11 +60,11 @@ namespace trail_decision_making
                     std::reverse(path.begin(), path.end());
                     return path;
                 }
-                // If this edge is inspected, add the other end of the edge to the frontier if we haven't seen it yet.
+                // Already inspected: keep searching beyond it
                 const int next = otherEnd(edge_id, node);
                 if (parent.find(next) == parent.end())
                 {
-                    parent[next] = {node, edge_id}; // record how we got to this node
+                    parent[next] = {node, edge_id};
                     frontier.push(next);
                 }
             }
@@ -140,22 +136,24 @@ namespace trail_decision_making
                 {
                     continue;
                 }
-                const int step = e->status == EdgeStatus::BLOCKED ? 1 : 0;
-                const int next = otherEnd(edge_id, node);
-                const auto known = cost.find(next);
-                if (known != cost.end() && known->second <= cost[node] + step)
+                const int edge_cost = e->status == EdgeStatus::BLOCKED ? 1 : 0;
+                const int next_node = otherEnd(edge_id, node);
+                const int new_cost = cost[node] + edge_cost;
+                const auto known = cost.find(next_node); // already reached at least as cheaply: skip
+                if (known != cost.end() && known->second <= new_cost)
                 {
                     continue;
                 }
-                cost[next] = cost[node] + step;
-                parent[next] = {node, edge_id};
-                if (step == 0)
+                cost[next_node] = new_cost;
+                parent[next_node] = {node, edge_id};
+                // 0-cost edges go to the front of the deque so nodes still come off in cost order
+                if (edge_cost == 0)
                 {
-                    frontier.push_front(next);
+                    frontier.push_front(next_node);
                 }
                 else
                 {
-                    frontier.push_back(next);
+                    frontier.push_back(next_node);
                 }
             }
         }

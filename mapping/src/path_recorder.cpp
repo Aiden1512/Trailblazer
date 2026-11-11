@@ -1,34 +1,40 @@
 
-#include <rclcpp/rclcpp.hpp>
-#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
-#include <geometry_msgs/msg/point.hpp>
-#include <nav_msgs/msg/occupancy_grid.hpp>
+// Phase 1 trail recorder: while the Husky is driven around, detects junctions from the SLAM map (3+ open
+// directions around the robot) and records the trails between them as waypoints. The graph is saved to
+// save_file (junction_nodes.yaml) after every change and published on /husky1/trail_graph for the GUI.
 #include <cmath>
 #include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
-#include <visualization_msgs/msg/marker.hpp>
+
+#include <geometry_msgs/msg/point.hpp>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <nav_msgs/msg/occupancy_grid.hpp>
+#include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/color_rgba.hpp>
 #include <std_msgs/msg/string.hpp>
-#include <sstream>
 #include <std_srvs/srv/trigger.hpp>
+#include <visualization_msgs/msg/marker.hpp>
 
 struct JunctionNode
-{   
+{
     int id;
     double x;
     double y;
     double yaw;
 };
 
-struct TrailWaypoint{
+struct TrailWaypoint
+{
     double x;
     double y;
     double yaw;
 };
 
-struct Trail{
+struct Trail
+{
     int id;
     int start_junction;
     int end_junction = -1;
@@ -36,15 +42,11 @@ struct Trail{
     std::vector<TrailWaypoint> waypoints;
 };
 
-
 class JunctionRecorder : public rclcpp::Node
 {
 public:
-    JunctionRecorder()
-        : Node("junction_recorder")
+    JunctionRecorder() : Node("junction_recorder")
     {
-    
-        
         this->declare_parameter<double>("detection_radius", 1.5);
         this->declare_parameter<std::string>("save_file", "junction_nodes.yaml");
         this->declare_parameter<double>("waypoint_spacing", 0.7);
@@ -53,68 +55,73 @@ public:
         save_file_ = this->get_parameter("save_file").as_string();
         waypoint_spacing_ = this->get_parameter("waypoint_spacing").as_double();
 
-        pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("/husky1/pose", 10, std::bind(&JunctionRecorder::poseCallback, this, std::placeholders::_1));
-        map_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>("/husky1/map", 10, std::bind(&JunctionRecorder::mapCallback, this, std::placeholders::_1));
+        pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+            "/husky1/pose", 10, std::bind(&JunctionRecorder::poseCallback, this, std::placeholders::_1));
+        map_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
+            "/husky1/map", 10, std::bind(&JunctionRecorder::mapCallback, this, std::placeholders::_1));
         ray_marker_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/husky1/junction_rays", 10);
         graph_pub_ = this->create_publisher<std_msgs::msg::String>("/husky1/trail_graph", 10);
-        reset_service_ = this->create_service<std_srvs::srv::Trigger>("/husky1/reset_trail_graph", [this](
-            const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
-            std::shared_ptr<std_srvs::srv::Trigger::Response> response)
-                {
-                    (void)request;
+        reset_service_ = this->create_service<std_srvs::srv::Trigger>(
+            "/husky1/reset_trail_graph",
+            [this](const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+                   std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+            {
+                (void)request;
 
-                    // Clear and reset all 
-                    nodes_.clear();
-                    trails_.clear();
-                    next_junction_id_ = 1;
-                    next_trail_id_ = 1;
-                    current_trail_index_ = -1;
-                    active_junction_id_ = -1;
-                    consecutive_detections_ = 0;
-                    has_last_waypoint_ = false;
-                    last_waypoint_x_ = 0.0;
-                    last_waypoint_y_ = 0.0;
-                    recording_enabled_ = false;
+                // Forget everything recorded so far
+                nodes_.clear();
+                trails_.clear();
+                next_junction_id_ = 1;
+                next_trail_id_ = 1;
+                current_trail_index_ = -1;
+                active_junction_id_ = -1;
+                consecutive_detections_ = 0;
+                has_last_waypoint_ = false;
+                last_waypoint_x_ = 0.0;
+                last_waypoint_y_ = 0.0;
+                recording_enabled_ = false;
 
-                    // Save empty graph and publish to GUI
-                    saveNodes();
+                // Save empty graph and publish to GUI
+                saveNodes();
 
-                    RCLCPP_INFO(this->get_logger(), "Trail graph reset");
+                RCLCPP_INFO(this->get_logger(), "Trail graph reset");
 
-                    response->success = true;
-                    response->message = "Trail graph reset";
-                });
-        start_service_ = this->create_service<std_srvs::srv::Trigger>("/husky1/start_trail_recording",
-        [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>, std::shared_ptr<std_srvs::srv::Trigger::Response> response)
-        {
-            recording_enabled_ = true;
-            response->success = true;
-            response->message = "Recording started";
-            RCLCPP_INFO(this->get_logger(), "Recording started");
-        });
+                response->success = true;
+                response->message = "Trail graph reset";
+            });
+        start_service_ = this->create_service<std_srvs::srv::Trigger>(
+            "/husky1/start_trail_recording",
+            [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+                   std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+            {
+                recording_enabled_ = true;
+                response->success = true;
+                response->message = "Recording started";
+                RCLCPP_INFO(this->get_logger(), "Recording started");
+            });
         // Stops adding junctions and waypoints (e.g. once Phase 1 is finished); the graph so far is kept and saved
-        stop_service_ = this->create_service<std_srvs::srv::Trigger>("/husky1/stop_trail_recording",
-        [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>, std::shared_ptr<std_srvs::srv::Trigger::Response> response)
-        {
-            recording_enabled_ = false;
-            saveNodes();
-            response->success = true;
-            response->message = "Recording stopped";
-            RCLCPP_INFO(this->get_logger(), "Recording stopped");
-        });
+        stop_service_ = this->create_service<std_srvs::srv::Trigger>(
+            "/husky1/stop_trail_recording",
+            [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+                   std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+            {
+                recording_enabled_ = false;
+                saveNodes();
+                response->success = true;
+                response->message = "Recording stopped";
+                RCLCPP_INFO(this->get_logger(), "Recording stopped");
+            });
     }
 
     ~JunctionRecorder()
     {
         // Don't overwrite a previously recorded graph with an empty one when nothing was recorded this run
-        // (path_recorder now starts with every launch). A deliberate reset already saved the empty graph.
+        // (path_recorder starts with every launch). A deliberate reset has already saved the empty graph.
         if (!nodes_.empty() || !trails_.empty())
             saveNodes();
     }
 
-
 private:
-
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pose_sub_;
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr ray_marker_pub_;
@@ -125,39 +132,46 @@ private:
     nav_msgs::msg::OccupancyGrid::SharedPtr latest_map_;
     std::vector<JunctionNode> nodes_;
 
-    double detection_radius_; //How far from the robot to check for open paths
-    double angle_resolution_deg_ = 5.0; //Angle frequency of checks for open paths 
-    double ray_step_ = 0.10; //Distance between samples along each ray
-    double minimum_opening_deg_ = 25.0; //Minimum size of an opening
-    double minimum_node_distance_ = 1.5; //Minimum distance between nodes
-    int confirmation_required_ = 3; //Number of consecutive detections required to be considered a node
-    int occupied_threshold_ = 50; //How confident before consider occupancy map occupied
+    // Junction detection
+    double detection_radius_;            // how far from the robot (m) to look for open directions
+    double angle_resolution_deg_ = 5.0;  // angle between the rays cast around the robot
+    double ray_step_ = 0.10;             // distance (m) between map samples along each ray
+    double minimum_opening_deg_ = 25.0;  // narrower gaps between obstacles don't count as an opening
+    double minimum_node_distance_ = 1.5; // detections closer than this (m) to a junction are the same junction
+    int confirmation_required_ = 3;      // consecutive detections needed before a junction is saved
+    int occupied_threshold_ = 50;        // occupancy grid value at or above which a cell is an obstacle
     int consecutive_detections_ = 0;
     std::string save_file_;
 
-    std::vector<Trail> trails_; 
-    int next_trail_id_ = 1; //next unused trail id
-    int next_junction_id_ = 1; //next unused junction id
-    int current_trail_index_ = -1;
-    int active_junction_id_ = -1;
-    double waypoint_spacing_ = 0.7; //distance we want to know when to place next waypoint (0.5 m so Phase 2 follows curves, not straight cuts across them)
-    double junction_exit_distance_ = 1.8; //distance from a junction before it can trigger again
-    double last_waypoint_x_ = 0.0; //last recorded waypoint position
-    double last_waypoint_y_ = 0.0; //last recorded waypoint position
-    bool has_last_waypoint_ = false; // if there is a waypoint reference position
+    // Trail recording
+    std::vector<Trail> trails_;
+    int next_trail_id_ = 1;
+    int next_junction_id_ = 1;
+    int current_trail_index_ = -1; // trail being recorded, -1 between leaving one and reaching a junction
+    int active_junction_id_ = -1;  // junction the robot is still inside, so it isn't handled again
+    // Distance (m) between recorded waypoints: small enough that Phase 2 follows curves rather than cutting them
+    double waypoint_spacing_ = 0.7;
+    double junction_exit_distance_ = 1.8; // distance (m) from a junction before it can trigger again
+    double last_waypoint_x_ = 0.0;
+    double last_waypoint_y_ = 0.0;
+    bool has_last_waypoint_ = false;
     bool recording_enabled_ = false;
-    
-    
 
-   
     void mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
     {
         latest_map_ = msg;
     }
 
     void poseCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg)
-    {   if (!recording_enabled_) {return;}
-        if (!latest_map_){return;}
+    {
+        if (!recording_enabled_)
+        {
+            return;
+        }
+        if (!latest_map_)
+        {
+            return;
+        }
 
         double x = msg->pose.pose.position.x;
         double y = msg->pose.pose.position.y;
@@ -167,7 +181,7 @@ private:
         {
             Trail trail;
             trail.id = next_trail_id_++;
-            trail.start_junction = -1;  // No junction at the starting position
+            trail.start_junction = -1; // No junction at the starting position
             trails_.push_back(trail);
 
             current_trail_index_ = 0;
@@ -181,7 +195,6 @@ private:
             saveNodes();
         }
 
-
         int openings = detectOpenings(x, y);
         checkJunctionExit(x, y);
 
@@ -191,7 +204,8 @@ private:
         if (openings >= 3)
         {
             consecutive_detections_++;
-            RCLCPP_INFO(this->get_logger(), "Possible junction: %d openings (%d/%d)", openings, consecutive_detections_, confirmation_required_);
+            RCLCPP_INFO(this->get_logger(), "Possible junction: %d openings (%d/%d)", openings, consecutive_detections_,
+                        confirmation_required_);
         }
         else
         {
@@ -199,138 +213,130 @@ private:
         }
 
         // Junction must be detected repeatedly.
-        if (consecutive_detections_ >= confirmation_required_){
-
-            if (active_junction_id_ == -1){
+        if (consecutive_detections_ >= confirmation_required_)
+        {
+            if (active_junction_id_ == -1)
+            {
                 handleJunction(x, y, yaw);
             }
 
             consecutive_detections_ = 0;
-            }
+        }
         recordTrailWaypoint(x, y, yaw);
     }
 
-   int detectOpenings(double robot_x, double robot_y)
-{
-    int number_of_rays =
-        static_cast<int>(360.0 / angle_resolution_deg_);
-
-    std::vector<bool> ray_is_open(number_of_rays, false);
-
-    // Marker containing all of our rays
-    visualization_msgs::msg::Marker marker;
-
-    marker.header.frame_id = "husky1_map";
-    marker.header.stamp = this->now();
-
-    marker.ns = "junction_detection";
-    marker.id = 0;
-
-    marker.type = visualization_msgs::msg::Marker::LINE_LIST;
-    marker.action = visualization_msgs::msg::Marker::ADD;
-    marker.scale.x = 0.02;
-
-  
-    for (int i = 0; i < number_of_rays; i++)
+    int detectOpenings(double robot_x, double robot_y)
     {
-        double angle_deg = i * angle_resolution_deg_;
+        int number_of_rays = static_cast<int>(360.0 / angle_resolution_deg_);
 
-        double angle_rad = angle_deg * M_PI / 180.0;
+        std::vector<bool> ray_is_open(number_of_rays, false);
 
-        bool open = isDirectionOpen(robot_x, robot_y, angle_rad);
-        ray_is_open.at(i) = open;
+        // Marker containing all of our rays
+        visualization_msgs::msg::Marker marker;
 
-        // Start of ray
-        geometry_msgs::msg::Point start;
+        marker.header.frame_id = "husky1_map";
+        marker.header.stamp = this->now();
 
-        start.x = robot_x;
-        start.y = robot_y;
-        start.z = 0.1;
+        marker.ns = "junction_detection";
+        marker.id = 0;
 
-        // End of ray
-        geometry_msgs::msg::Point end;
+        marker.type = visualization_msgs::msg::Marker::LINE_LIST;
+        marker.action = visualization_msgs::msg::Marker::ADD;
+        marker.scale.x = 0.02;
 
-        end.x = robot_x + detection_radius_ * std::cos(angle_rad);
-        end.y = robot_y + detection_radius_ * std::sin(angle_rad);
-        end.z = 0.1;
-
-        std_msgs::msg::ColorRGBA colour;
-
-        if (open)
+        for (int i = 0; i < number_of_rays; i++)
         {
-            // Green, algorithm thinks this direction is open
-            colour.r = 0.0;
-            colour.g = 1.0;
-            colour.b = 0.0;
-            colour.a = 1.0;
-        }
-        else
-        {
-            // Red, algorithm thinks this direction is blocked
-            colour.r = 1.0;
-            colour.g = 0.0;
-            colour.b = 0.0;
-            colour.a = 1.0;
+            double angle_deg = i * angle_resolution_deg_;
+
+            double angle_rad = angle_deg * M_PI / 180.0;
+
+            bool open = isDirectionOpen(robot_x, robot_y, angle_rad);
+            ray_is_open.at(i) = open;
+
+            // Start of ray
+            geometry_msgs::msg::Point start;
+
+            start.x = robot_x;
+            start.y = robot_y;
+            start.z = 0.1;
+
+            // End of ray
+            geometry_msgs::msg::Point end;
+
+            end.x = robot_x + detection_radius_ * std::cos(angle_rad);
+            end.y = robot_y + detection_radius_ * std::sin(angle_rad);
+            end.z = 0.1;
+
+            std_msgs::msg::ColorRGBA colour;
+
+            if (open)
+            {
+                // Green, algorithm thinks this direction is open
+                colour.r = 0.0;
+                colour.g = 1.0;
+                colour.b = 0.0;
+                colour.a = 1.0;
+            }
+            else
+            {
+                // Red, algorithm thinks this direction is blocked
+                colour.r = 1.0;
+                colour.g = 0.0;
+                colour.b = 0.0;
+                colour.a = 1.0;
+            }
+
+            marker.colors.push_back(colour);
+            marker.colors.push_back(colour);
+
+            marker.points.push_back(start);
+            marker.points.push_back(end);
         }
 
-        marker.colors.push_back(colour);
-        marker.colors.push_back(colour);
+        ray_marker_pub_->publish(marker);
 
-        marker.points.push_back(start);
-        marker.points.push_back(end);
+        return countOpenSectors(ray_is_open);
     }
 
-    ray_marker_pub_->publish(marker);
-
-    return countOpenSectors(ray_is_open);
-}
-
-bool isDirectionOpen(double robot_x, double robot_y, double angle)
-{
-    for (double distance = ray_step_; distance <= detection_radius_; distance += ray_step_)
+    bool isDirectionOpen(double robot_x, double robot_y, double angle)
     {
-        double world_x = robot_x + distance * std::cos(angle);
-        double world_y = robot_y + distance * std::sin(angle);
-
-        int grid_x;
-        int grid_y;
-
-        if (!worldToGrid(world_x, world_y, grid_x, grid_y))
+        for (double distance = ray_step_; distance <= detection_radius_; distance += ray_step_)
         {
-            return false;
+            double world_x = robot_x + distance * std::cos(angle);
+            double world_y = robot_y + distance * std::sin(angle);
+
+            int grid_x;
+            int grid_y;
+
+            if (!worldToGrid(world_x, world_y, grid_x, grid_y))
+            {
+                return false;
+            }
+
+            int index = grid_y * latest_map_->info.width + grid_x;
+            int8_t value = latest_map_->data[index];
+
+            // Unknown (-1) cells count as open: the SLAM map is still filling in while the trail is driven
+            if (value >= occupied_threshold_)
+            {
+                return false;
+            }
         }
 
-        int index = grid_y * latest_map_->info.width + grid_x;
-        int8_t value = latest_map_->data[index];
-
-        // Unknown map cell
-        //if (value == -1)
-        //{
-        //    return false;
-        //}
-
-        // Occupied map cell
-        if (value >= occupied_threshold_)
-        {
-            return false;
-        }
+        return true;
     }
 
-    return true;
-}
-    
-
-
-
-   
     int countOpenSectors(const std::vector<bool> &open_rays)
     {
-        if (open_rays.empty()) {return 0;}
+        if (open_rays.empty())
+        {
+            return 0;
+        }
 
-        int minimum_rays = static_cast<int>(std::ceil(minimum_opening_deg_ /angle_resolution_deg_ ));
+        int minimum_rays = static_cast<int>(std::ceil(minimum_opening_deg_ / angle_resolution_deg_));
 
-
-        // Considering that angle directions form circle, its easiest to start with a known blocked angle index first
+        // The rays wrap round in a circle, so start counting just after a blocked ray: then no opening is split
+        // in two across the start/end of the vector
         int blocked_index = -1;
 
         for (size_t i = 0; i < open_rays.size(); i++)
@@ -342,10 +348,9 @@ bool isDirectionOpen(double robot_x, double robot_y, double angle)
             }
         }
 
-        
         if (blocked_index == -1)
         {
-            return 1; // Everything around the robot is open so treat it as one large open region rather than many branches.
+            return 1; // open all round: one big open area, not a junction
         }
 
         int openings = 0;
@@ -377,7 +382,6 @@ bool isDirectionOpen(double robot_x, double robot_y, double angle)
             openings++;
         }
 
-
         return openings;
     }
 
@@ -387,36 +391,17 @@ bool isDirectionOpen(double robot_x, double robot_y, double angle)
         double origin_y = latest_map_->info.origin.position.y;
         double resolution = latest_map_->info.resolution;
 
-
         grid_x = static_cast<int>(std::floor((world_x - origin_x) / resolution));
         grid_y = static_cast<int>(std::floor((world_y - origin_y) / resolution));
 
-        if (grid_x < 0 || grid_y < 0 || grid_x >=static_cast<int>(latest_map_->info.width) || grid_y >= static_cast<int>(latest_map_->info.height))
+        if (grid_x < 0 || grid_y < 0 || grid_x >= static_cast<int>(latest_map_->info.width) ||
+            grid_y >= static_cast<int>(latest_map_->info.height))
         {
             return false;
         }
 
         return true;
     }
-
-
-    bool nodeNearby(double x, double y)
-    {
-        for (const auto &node : nodes_)
-        {
-            double dx = x - node.x;
-            double dy = y - node.y;
-            double distance = std::sqrt(dx * dx + dy * dy);
-
-            if (distance < minimum_node_distance_)
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-
 
     int findExistingJunction(double x, double y)
     {
@@ -433,10 +418,10 @@ bool isDirectionOpen(double robot_x, double robot_y, double angle)
             }
         }
 
-        return -1; //No existing junction nearby
+        return -1; // No existing junction nearby
     }
 
-    const JunctionNode* getJunction(int id)
+    const JunctionNode *getJunction(int id)
     {
         for (const auto &node : nodes_)
         {
@@ -449,7 +434,6 @@ bool isDirectionOpen(double robot_x, double robot_y, double angle)
         return nullptr;
     }
 
-
     void startNewTrail(int junction_id)
     {
         Trail trail;
@@ -459,7 +443,7 @@ bool isDirectionOpen(double robot_x, double robot_y, double angle)
 
         current_trail_index_ = static_cast<int>(trails_.size()) - 1;
 
-        // wait until the robot leaves the junction before recording waypoints.
+        // The first waypoint of the new trail is then spaced from the junction itself (see recordTrailWaypoint)
         has_last_waypoint_ = false;
 
         RCLCPP_INFO(this->get_logger(), "Started Trail %d at Junction %d", trail.id, junction_id);
@@ -480,16 +464,17 @@ bool isDirectionOpen(double robot_x, double robot_y, double angle)
 
         saveNodes();
     }
+
     void recordTrailWaypoint(double x, double y, double yaw)
     {
         if (current_trail_index_ == -1)
         {
             return;
         }
-        
+
         // Keep recording inside the junction zone too: the junction is saved on the approach (its rays see the
-        // openings ~2 m early), so the turn itself happens in the zone. Skipping it left a ~2 m straight line from
-        // the junction to the first waypoint that cut the corner in Phase 2 (and clipped trees).
+        // openings ~2 m early), so the turn itself happens in the zone. Without these waypoints Phase 2 would
+        // drive a straight line from the junction that cuts the corner.
 
         if (!has_last_waypoint_)
         {
@@ -497,18 +482,21 @@ bool isDirectionOpen(double robot_x, double robot_y, double angle)
 
             if (trail.start_junction != -1)
             {
-                const JunctionNode* start = getJunction(trail.start_junction);
+                const JunctionNode *start = getJunction(trail.start_junction);
 
-                if (start){
+                if (start)
+                {
                     last_waypoint_x_ = start->x;
                     last_waypoint_y_ = start->y;
                 }
-                else{
+                else
+                {
                     last_waypoint_x_ = x;
                     last_waypoint_y_ = y;
                 }
             }
-            else{
+            else
+            {
                 last_waypoint_x_ = x;
                 last_waypoint_y_ = y;
             }
@@ -531,7 +519,8 @@ bool isDirectionOpen(double robot_x, double robot_y, double angle)
             last_waypoint_x_ = x;
             last_waypoint_y_ = y;
 
-            RCLCPP_INFO(this->get_logger(), "Trail %d: Waypoint saved at x=%.2f y=%.2f", trails_[current_trail_index_].id, x, y);
+            RCLCPP_INFO(this->get_logger(), "Trail %d: Waypoint saved at x=%.2f y=%.2f",
+                        trails_[current_trail_index_].id, x, y);
             saveNodes();
         }
     }
@@ -549,11 +538,11 @@ bool isDirectionOpen(double robot_x, double robot_y, double angle)
         {
             RCLCPP_INFO(this->get_logger(), "Revisited Junction %d", junction_id);
         }
-        if (active_junction_id_ == junction_id) //so not constantly saving junction
+        if (active_junction_id_ == junction_id) // still inside the junction we just handled
         {
             return;
         }
-        //end old trail and start new trail
+        // A junction ends the trail being recorded and starts the next one from it
         finishCurrentTrail(junction_id);
         startNewTrail(junction_id);
         active_junction_id_ = junction_id;
@@ -562,12 +551,14 @@ bool isDirectionOpen(double robot_x, double robot_y, double angle)
 
     void checkJunctionExit(double x, double y)
     {
-        if (active_junction_id_ == -1){
+        if (active_junction_id_ == -1)
+        {
             return;
         }
-        const JunctionNode* junction = getJunction(active_junction_id_);
+        const JunctionNode *junction = getJunction(active_junction_id_);
 
-        if (!junction){
+        if (!junction)
+        {
             return;
         }
 
@@ -576,8 +567,8 @@ bool isDirectionOpen(double robot_x, double robot_y, double angle)
 
         double distance = std::sqrt(dx * dx + dy * dy);
 
-        if (distance >= junction_exit_distance_){
-
+        if (distance >= junction_exit_distance_)
+        {
             active_junction_id_ = -1;
         }
     }
@@ -591,152 +582,134 @@ bool isDirectionOpen(double robot_x, double robot_y, double angle)
         node.yaw = yaw;
         nodes_.push_back(node);
 
-        RCLCPP_INFO(this->get_logger(),"JUNCTION SAVED"); 
-        RCLCPP_INFO(this->get_logger(), "Position: x=%.3f y=%.3f", x, y);
-        RCLCPP_INFO(this->get_logger(), "Junction ID: %d", node.id);
+        RCLCPP_INFO(this->get_logger(), "Junction %d saved at x=%.3f y=%.3f", node.id, x, y);
 
         saveNodes();
     }
 
-
-
-void saveNodes()
-{
-
-    std::ofstream file(save_file_);
-
-    if (!file.is_open()) {
-        RCLCPP_ERROR(this->get_logger(), "Could not open %s", save_file_.c_str());
-        return;
-    }
-
-    file << "frame_id: husky1_map\n";
-    file << "\njunctions:\n";
-
-    for (const auto &node : nodes_)
+    void saveNodes()
     {
-        file << "  - id: " << node.id << "\n";
-        file << "    x: " << node.x << "\n";
-        file << "    y: " << node.y << "\n";
-        file << "    yaw: " << node.yaw << "\n";
-    }
+        std::ofstream file(save_file_);
 
-    file << "\ntrails:\n";
-    for (const auto &trail : trails_)
-    {
-        file << "  - id: " << trail.id << "\n";
-
-        file << "    start_junction: " << trail.start_junction << "\n";
-
-        if (trail.end_junction == -1)
+        if (!file.is_open())
         {
-            file << "    end_junction: null\n";
-        }
-        else
-        {
-            file << "    end_junction: " << trail.end_junction << "\n";
+            RCLCPP_ERROR(this->get_logger(), "Could not open %s", save_file_.c_str());
+            return;
         }
 
-        if (trail.waypoints.empty())
-        {
-            file << "    waypoints: []\n";
-        }
-        else
-        {
-            file << "    waypoints:\n";
+        file << "frame_id: husky1_map\n";
+        file << "\njunctions:\n";
 
-            for (const auto &waypoint : trail.waypoints)
+        for (const auto &node : nodes_)
+        {
+            file << "  - id: " << node.id << "\n";
+            file << "    x: " << node.x << "\n";
+            file << "    y: " << node.y << "\n";
+            file << "    yaw: " << node.yaw << "\n";
+        }
+
+        file << "\ntrails:\n";
+        for (const auto &trail : trails_)
+        {
+            file << "  - id: " << trail.id << "\n";
+
+            file << "    start_junction: " << trail.start_junction << "\n";
+
+            if (trail.end_junction == -1)
             {
-                file << "      - x: " << waypoint.x << "\n";
-                file << "        y: " << waypoint.y << "\n";
-                file << "        yaw: " << waypoint.yaw << "\n";
+                file << "    end_junction: null\n";
+            }
+            else
+            {
+                file << "    end_junction: " << trail.end_junction << "\n";
+            }
+
+            if (trail.waypoints.empty())
+            {
+                file << "    waypoints: []\n";
+            }
+            else
+            {
+                file << "    waypoints:\n";
+
+                for (const auto &waypoint : trail.waypoints)
+                {
+                    file << "      - x: " << waypoint.x << "\n";
+                    file << "        y: " << waypoint.y << "\n";
+                    file << "        yaw: " << waypoint.yaw << "\n";
+                }
             }
         }
+
+        file.close();
+
+        RCLCPP_INFO(this->get_logger(), "Saved %zu junctions and %zu trails to %s", nodes_.size(), trails_.size(),
+                    save_file_.c_str());
+        publishGraph();
     }
-
-    file.close();
-
-    RCLCPP_INFO( this->get_logger(),"Saved %zu junctions and %zu trails to %s", nodes_.size(), trails_.size(), save_file_.c_str());
-    publishGraph();
-
-    }
-
-
 
     double getYaw(const geometry_msgs::msg::Quaternion &q)
     {
-        double siny_cosp = 2.0 *(q.w * q.z + q.x * q.y);
-        double cosy_cosp = 1.0 - 2.0 *(q.y * q.y + q.z * q.z);
+        double siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
+        double cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
 
         return std::atan2(siny_cosp, cosy_cosp);
     }
 
     void publishGraph()
-{
-    std::ostringstream out;
-
-    out << "{\"junctions\":[";
-
-    for (size_t i = 0; i < nodes_.size(); ++i)
     {
-        if (i > 0) out << ",";
+        std::ostringstream out;
 
-        out << "{\"id\":" << nodes_[i].id
-            << ",\"x\":" << nodes_[i].x
-            << ",\"y\":" << nodes_[i].y << "}";
-    }
+        out << "{\"junctions\":[";
 
-    out << "],\"trails\":[";
-
-    for (size_t i = 0; i < trails_.size(); ++i)
-    {
-        if (i > 0) out << ",";
-
-        const auto &trail = trails_[i];
-
-        out << "{\"id\":" << trail.id
-            << ",\"start_junction\":" << trail.start_junction
-            << ",\"end_junction\":" << trail.end_junction
-            << ",\"waypoints\":[";
-
-        for (size_t j = 0; j < trail.waypoints.size(); ++j)
+        for (size_t i = 0; i < nodes_.size(); ++i)
         {
-            if (j > 0) out << ",";
+            if (i > 0)
+                out << ",";
 
-            out << "{\"x\":" << trail.waypoints[j].x
-                << ",\"y\":" << trail.waypoints[j].y << "}";
+            out << "{\"id\":" << nodes_[i].id << ",\"x\":" << nodes_[i].x << ",\"y\":" << nodes_[i].y << "}";
+        }
+
+        out << "],\"trails\":[";
+
+        for (size_t i = 0; i < trails_.size(); ++i)
+        {
+            if (i > 0)
+                out << ",";
+
+            const auto &trail = trails_[i];
+
+            out << "{\"id\":" << trail.id << ",\"start_junction\":" << trail.start_junction
+                << ",\"end_junction\":" << trail.end_junction << ",\"waypoints\":[";
+
+            for (size_t j = 0; j < trail.waypoints.size(); ++j)
+            {
+                if (j > 0)
+                    out << ",";
+
+                out << "{\"x\":" << trail.waypoints[j].x << ",\"y\":" << trail.waypoints[j].y << "}";
+            }
+
+            out << "]}";
         }
 
         out << "]}";
+
+        std_msgs::msg::String msg;
+        msg.data = out.str();
+        graph_pub_->publish(msg);
     }
-
-    out << "]}";
-
-    std_msgs::msg::String msg;
-    msg.data = out.str();
-    graph_pub_->publish(msg);
-}
-
 };
 
-
-
-
-
-
-int main(int argc,char * argv[])
+int main(int argc, char *argv[])
 {
     rclcpp::init(argc, argv);
 
-
     auto node = std::make_shared<JunctionRecorder>();
-
 
     rclcpp::spin(node);
 
-
     rclcpp::shutdown();
-
 
     return 0;
 }

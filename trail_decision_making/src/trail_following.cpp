@@ -21,7 +21,7 @@ namespace trail_decision_making
     // Follow the edge's waypoints from current_node_id_ to its other end, driving to the entry waypoint first if we are not there.
     void MissionManager::startEdgeFollow(const TrailEdge &edge, bool reverse)
     {
-        auto waypoints = edge.waypoints; // copy the waypoints so we can modify them without affecting the original edge
+        auto waypoints = edge.waypoints; // copy: reversed and thinned below without touching the graph
         if (waypoints.empty())
         {
             RCLCPP_ERROR(get_logger(), "Edge %d has no waypoints; cannot navigate", edge.id);
@@ -95,8 +95,8 @@ namespace trail_decision_making
         }
 
         goal_retry_count_ = 0;
-        current_waypoint_index_ = first_waypoint; // set the current waypoint index to the first waypoint we want to navigate to
-        sendNextWaypoint();                       // send the first waypoint to Nav2 to start navigating the edge
+        current_waypoint_index_ = first_waypoint;
+        sendNextWaypoint();
     }
 
     // send the next waypoint in the current edge to Nav2 for navigation.

@@ -24,7 +24,6 @@ import ros_context
 try:
     import rclpy
     import tf2_ros
-    from rclpy.time import Time
     from rclpy.node import Node
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import qos_profile_sensor_data

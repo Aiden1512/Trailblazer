@@ -1,5 +1,5 @@
-#ifndef TRAIL_DECISION_MAKING__ROUTE_PLANNER_HPP_
-#define TRAIL_DECISION_MAKING__ROUTE_PLANNER_HPP_
+#ifndef TRAIL_DECISION_MAKING__ROUTE_PLANNER_H_
+#define TRAIL_DECISION_MAKING__ROUTE_PLANNER_H_
 
 #include <vector>
 
@@ -37,4 +37,4 @@ namespace trail_decision_making
 
 } // namespace trail_decision_making
 
-#endif // TRAIL_DECISION_MAKING__ROUTE_PLANNER_HPP_
+#endif // TRAIL_DECISION_MAKING__ROUTE_PLANNER_H_

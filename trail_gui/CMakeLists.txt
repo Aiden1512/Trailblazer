@@ -7,27 +7,29 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 
-# All five GUI files are installed into the same lib/<pkg> directory so
-# that main.py's plain "from state import TrailState" style imports keep
-# resolving after install (Python adds a script's own directory to
-# sys.path, and the sibling modules live right next to it here).
+# Every GUI module is installed next to main.py in lib/<pkg>, so main.py's
+# plain "from state import TrailState" style imports keep resolving after
+# install (Python adds the script's own directory to sys.path).
 install(PROGRAMS
   main.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
 install(FILES
-  state.py
-  map_canvas.py
   camera_feed.py
   camera_panel.py
-  ros_context.py
+  camera_window.py
+  legend_window.py
+  map_canvas.py
+  mission_graph.py
   mission_status.py
-  robot_pose.py
-  sim_obstacles.py
-  start_screen.py
   phase1_teleop.py
   phase2_inspection.py
+  robot_pose.py
+  ros_context.py
+  sim_obstacles.py
+  start_screen.py
+  state.py
   Floor_Texture.png
   DESTINATION lib/${PROJECT_NAME}
 )

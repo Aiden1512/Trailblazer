@@ -8,7 +8,6 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import String
 from cv_bridge import CvBridge
 from ultralytics import YOLO
-import cv2
 
 
 class YOLOObstacleDetector(Node):
@@ -88,7 +87,6 @@ class YOLOObstacleDetector(Node):
         self.front_obstacle_pub.publish(front_msg)
 
         annotated_frame = results[0].plot()
-    
 
         annotated_msg = Image()
         annotated_msg.height = annotated_frame.shape[0]

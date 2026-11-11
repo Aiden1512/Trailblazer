@@ -3,8 +3,8 @@
 <package format="3">
   <name>trail_decision_making</name>
   <version>1.0.5</version>
-  <description>41068 Robotics Studio 1 decision making</description>
-  <maintainer email="stella.moreitz@uts.edu.au">Stella Moreitz, University of Technology Sydney</maintainer>
+  <description>Phase 2 mission manager: plans and drives the autonomous trail inspection, handling blocked trails</description>
+  <maintainer email="stella.a.moreitz@student.uts.edu.au">TrailBlazer Team</maintainer>
   <license>Apache 2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>

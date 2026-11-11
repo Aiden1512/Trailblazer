@@ -294,7 +294,7 @@ global_costmap:
 map_server:
   ros__parameters:
     use_sim_time: true
-    yaml_filename: "/home/sourr/41068_ws/src/Trailblazer/41068_ignition_bringup/maps/newspawn_map.yaml"
+    yaml_filename: ""   # unused: the map comes from SLAM Toolbox, map_server is not launched
 map_saver:
   ros__parameters:
     use_sim_time: true

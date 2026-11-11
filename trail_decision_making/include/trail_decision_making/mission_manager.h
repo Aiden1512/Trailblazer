@@ -1,5 +1,5 @@
-#ifndef TRAIL_DECISION_MAKING__MISSION_MANAGER_HPP_
-#define TRAIL_DECISION_MAKING__MISSION_MANAGER_HPP_
+#ifndef TRAIL_DECISION_MAKING__MISSION_MANAGER_H_
+#define TRAIL_DECISION_MAKING__MISSION_MANAGER_H_
 
 #include <deque>
 #include <memory>
@@ -196,4 +196,4 @@ namespace trail_decision_making
 
 } // namespace trail_decision_making
 
-#endif // TRAIL_DECISION_MAKING__MISSION_MANAGER_HPP_
+#endif // TRAIL_DECISION_MAKING__MISSION_MANAGER_H_

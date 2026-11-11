@@ -27,7 +27,7 @@ export MESA_GL_VERSION_OVERRIDE=3.3
 Launch the trail world, including the mapping, navigation, perception, and GUI components:
 
 ```bash
-ros2 launch 41068_ignition_bringup 41068_ignition.launch.py \slam:=true nav2:=true rviz:=true \world:=trail_world \spawn_x:=6.5 spawn_y:=3 spawn_yaw:=3.14159
+ros2 launch 41068_ignition_bringup 41068_ignition.launch.py slam:=true nav2:=true rviz:=true world:=trail_world spawn_x:=6.5 spawn_y:=3 spawn_yaw:=3.14159
 ```
 
 **Expected windows and output:**

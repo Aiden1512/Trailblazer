@@ -139,7 +139,7 @@ namespace trail_decision_making
         return length;
     }
 
-    // Load the trail graph from the YAML file specified in the waypoints_file_ parameter.
+    // Load the trail graph from waypoints_file_ (the recorded or Phase 1 trails, whichever the GUI selected)
     void MissionManager::loadGraph()
     {
         RCLCPP_INFO(get_logger(), "Loading trail graph from '%s'", waypoints_file_.c_str());
@@ -153,22 +153,20 @@ namespace trail_decision_making
                     graph_.nodes().size(), graph_.edges().size());
     }
 
-    // This method is called when we want to start the mission. It checks if the graph is loaded,
-    // if TF is available, and if so, it sets the current node to the nearest node to the robot's
-    // current pose and starts the mission.
+    // Reload the trail file and, once TF gives the robot's pose, start from the junction nearest to it.
+    // Returns without starting (start_timer_ retries) while TF isn't available yet.
     void MissionManager::startMission()
     {
         RCLCPP_INFO(get_logger(), "Starting mission with frames global='%s', robot='%s'",
                     global_frame_.c_str(), robot_frame_.c_str());
 
-        loadGraph(); // load the graph from the waypoints file
+        loadGraph(); // reloaded so a trail source change from the GUI is picked up
         if (graph_.edges().empty())
         {
             RCLCPP_ERROR(get_logger(), "Mission cannot start: graph contains no edges");
             publishStatus("Cannot start: trail graph has no edges");
             return;
         }
-        // Check if TF is available before starting the mission
         if (!tf_buffer_->canTransform(global_frame_, robot_frame_, tf2::TimePointZero, 15s))
         {
             RCLCPP_WARN(get_logger(), "Waiting for TF: %s -> %s",
@@ -176,20 +174,19 @@ namespace trail_decision_making
             publishStatus("Waiting for localisation (" + global_frame_ + " -> " + robot_frame_ + ")");
             return;
         }
-        // Get the robot's current pose in the global frame
         geometry_msgs::msg::TransformStamped transform;
-        try // try to get the transform from the robot frame to the global frame
+        try
         {
             transform = tf_buffer_->lookupTransform(
                 global_frame_, robot_frame_, tf2::TimePointZero);
         }
-        catch (const tf2::TransformException &ex) // catch any TF exceptions and log an error
+        catch (const tf2::TransformException &ex)
         {
             RCLCPP_ERROR(get_logger(), "Could not get robot pose: %s", ex.what());
             return;
         }
 
-        start_timer_->cancel(); // cancel the timer so we don't try to start the mission again
+        start_timer_->cancel();
         RCLCPP_INFO(get_logger(), "TF is available; starting mission");
         publishStatus("Mission started");
         current_node_id_ = graph_.findNearestNode(
@@ -197,18 +194,19 @@ namespace trail_decision_making
             transform.transform.translation.y);
         home_node_id_ = graph_.findNearestNode(home_x_, home_y_);
         publishProgress();
-        mission_active_ = true;      // set the mission as active so we can start traversing edges
-        chooseNextEdgeAndSendGoal(); // choose the next edge to traverse and send the first waypoint of that edge
+        mission_active_ = true;
+        chooseNextEdgeAndSendGoal();
     }
 
+    // Take the next edge off the planned route (planning a new route first if it is empty) and start driving it
     void MissionManager::chooseNextEdgeAndSendGoal()
     {
-        if (!mission_active_) // if the mission is not active, we don't do anything
+        if (!mission_active_)
         {
             return;
         }
 
-        if (route_.empty()) // if we have no more edges to traverse
+        if (route_.empty())
         {
             // Plan a route to the next uninspected edge from the current node, or home once there are none left.
             // Replanned from scratch every time, so trails blocked since the last plan are avoided.
@@ -246,29 +244,30 @@ namespace trail_decision_making
                 }
                 return;
             }
-            route_.assign(plan.begin(), plan.end()); // assign the planned route to the route_ deque so we can traverse it
+            route_.assign(plan.begin(), plan.end());
         }
 
         current_edge_id_ = route_.front();
-        route_.pop_front();                                       // remove the edge from the route so we don't traverse it again
-        const TrailEdge *edge = graph_.getEdge(current_edge_id_); // get the edge from the graph so we can traverse it
+        route_.pop_front();
+        const TrailEdge *edge = graph_.getEdge(current_edge_id_);
         if (!edge)
         {
             RCLCPP_ERROR(get_logger(), "Could not find selected edge %d in graph", current_edge_id_);
-            mission_active_ = false; // this is a fatal error, so we stop the mission
+            mission_active_ = false;
             return;
         }
-        // Determine if we are traversing the edge in reverse (from to_node to from_node) or not (from from_node to to_node)
-        traversing_reverse_ = (edge->to_node == current_node_id_);        // if the current node is the to_node, we are traversing in reverse
+        // Edges are stored from_node -> to_node; starting at to_node means driving its waypoints in reverse
+        traversing_reverse_ = (edge->to_node == current_node_id_);
         // Coming into a blocked edge from its unchecked far side: inspect it up to the obstacle from this end
         checking_far_side_ = (edge->status == EdgeStatus::BLOCKED && edge->far_side_node == current_node_id_);
-        inspecting_edge_ = (edge->status == EdgeStatus::UNINSPECTED) || checking_far_side_; // false for already-inspected edges we are only passing through
-        startEdgeFollow(*edge, traversing_reverse_); // start traversing the edge, either in reverse or not, depending on the current node
+        // false for already-inspected edges we are only passing through
+        inspecting_edge_ = (edge->status == EdgeStatus::UNINSPECTED) || checking_far_side_;
+        startEdgeFollow(*edge, traversing_reverse_);
     }
 
 
-    // This method is called when we have finished traversing an edge, either because we reached the last waypoint
-    // (or finished backtracking, or reached home). It updates the current node and edge state, and chooses the next edge to traverse.
+    // Called when the current leg is done: the last waypoint of an edge was reached, a backtrack got back to its
+    // junction, or the robot reached home. Updates the mission state and moves on to the next edge.
     void MissionManager::onEdgeFinished()
     {
         if (driving_to_home_pose_) // reached the home position, nothing left to do
@@ -286,11 +285,11 @@ namespace trail_decision_making
             return;
         }
 
-        const TrailEdge *edge = graph_.getEdge(current_edge_id_); // get the edge again in case it was modified
-        if (!edge)                                                // this should never happen, but just in case
+        const TrailEdge *edge = graph_.getEdge(current_edge_id_);
+        if (!edge)
         {
             RCLCPP_ERROR(get_logger(), "Could not finish missing edge %d", current_edge_id_);
-            mission_active_ = false; // this is a fatal error, so we stop the mission
+            mission_active_ = false;
             return;
         }
 
@@ -298,7 +297,7 @@ namespace trail_decision_making
         // driving back, so the next uninspected edge is planned from wherever this one ended.
         if (inspecting_edge_)
         {
-            graph_.setEdgeStatus(current_edge_id_, EdgeStatus::INSPECTED); // mark the edge as inspected
+            graph_.setEdgeStatus(current_edge_id_, EdgeStatus::INSPECTED);
             graph_.setFarSideNode(current_edge_id_, -1);
             if (checking_far_side_) // came all the way through from the other side: the obstacle has gone
             {
@@ -315,8 +314,8 @@ namespace trail_decision_making
             checking_far_side_ = false;
         }
 
-        current_node_id_ = planner_.otherEnd(current_edge_id_, current_node_id_); // update the current node to the other end of the edge so we can plan to the next uninspected edge
-        chooseNextEdgeAndSendGoal();                                              // plan to the next uninspected edge and send the first waypoint of that edge
+        current_node_id_ = planner_.otherEnd(current_edge_id_, current_node_id_);
+        chooseNextEdgeAndSendGoal();
     }
 
     // No reachable uninspected trail is left, so follow the trails back to the junction nearest home

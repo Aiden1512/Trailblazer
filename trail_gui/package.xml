@@ -9,7 +9,7 @@
     autonomous inspection run, colouring routes green when clear and red when
     blocked by an obstacle.
   </description>
-  <maintainer email="you@example.com">TrailBlazer Team</maintainer>
+  <maintainer email="stella.a.moreitz@student.uts.edu.au">TrailBlazer Team</maintainer>
   <license>TODO: Declare license</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
@@ -18,10 +18,14 @@
   <exec_depend>python3-pil</exec_depend>
   <exec_depend>python3-pil.imagetk</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

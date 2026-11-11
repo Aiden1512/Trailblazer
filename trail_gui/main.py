@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-TrailBlazer - Operator GUI (MVP)
-=================================
+TrailBlazer - Operator GUI
+==========================
 
 Opens on a start screen with two options:
 
@@ -20,9 +20,9 @@ Opens on a start screen with two options:
       simulation. The inspection turns each route green once cleared, or red
       if an obstacle blocks it.
 
-Needs ROS 2 sourced in the terminal (to read the robot's position) and the
-simulation running (ros2 launch 41068_ignition_bringup 41068_ignition_husky.launch.py).
-Without them the GUI still opens and says what's missing.
+Started automatically by 41068_ignition.launch.py. Run on its own, it needs
+ROS 2 sourced (to read the robot's position) and the simulation running;
+without them the GUI still opens and says what's missing.
 
 Phase 2 also shows the real robot's status: obstacle warn/stop from the
 obstacle detector, the mission manager's progress, and the obstacle snapshot
@@ -31,8 +31,8 @@ from /husky1/obstacle_image.
 Both tabs have a "View Live Camera" button that opens the robot's camera in a
 separate window; the camera is only streamed while that window is open.
 
-Run with:
-    python3 main.py
+Run on its own with:
+    ros2 run trailblazer_gui main.py
 """
 import os
 import tkinter as tk

@@ -264,15 +264,15 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     ld.add_action(use_sim_time_launch_arg)
 
-    # Husky spawn position in the world (m). Default 0,0 as before.
+    # Husky spawn position in the world (m)
     ld.add_action(DeclareLaunchArgument('spawn_x', default_value='0.0'))
+    ld.add_action(DeclareLaunchArgument('spawn_y', default_value='0.0'))
+    # Husky heading at spawn (rad, anticlockwise from +x). 3.14159 = turned around.
+    ld.add_action(DeclareLaunchArgument('spawn_yaw', default_value='0.0'))
     # Phase 1 map of the scenery (map_saver YAML). Obstacles already in it don't stop the robot; '' = off.
     ld.add_action(DeclareLaunchArgument(
         'scenery_map',
         default_value=PathJoinSubstitution([FindPackageShare('41068_ignition_bringup'), 'maps', 'trail_map_v3.yaml'])))
-    ld.add_action(DeclareLaunchArgument('spawn_y', default_value='0.0'))
-    # Husky heading at spawn (rad, anticlockwise from +x). 3.14159 = turned around.
-    ld.add_action(DeclareLaunchArgument('spawn_yaw', default_value='0.0'))
 
     rviz_launch_arg = DeclareLaunchArgument(
         'rviz',
